@@ -1,0 +1,73 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go workspaces
+go.work
+go.work.sum
+
+# Coverage
+coverage.out
+coverage.html
+*.cov
+
+# Local data / dev runtime
+/data/
+*.db
+*.db-shm
+*.db-wal
+/tmp/
+
+# Local config (don't commit secrets)
+.env
+.env.local
+.env.*.local
+*.local.yaml
+config.local.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.zed/
+.cursor/
+.claude/
+
+# Logs
+*.log
+
+# Node (for ui/)
+ui/node_modules/
+ui/dist/
+ui/.vite/
+ui/.cache/
+ui/coverage/
+
+# Python (if any scripts)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Generated docs
+docs/.docusaurus/
+docs/build/
+docs/node_modules/
+
+# sqlc generated (commit normally, but allow ignoring during local regenerate experiments)
+# internal/store/*/queries_gen.go  ← 不忽略，要 commit
+
+# Tool versions
+# (.mise.toml and .tool-versions are committed)
+
+.pi/
+.pi-lsp.json
+.docs/

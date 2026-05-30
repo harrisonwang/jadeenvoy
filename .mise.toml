@@ -1,0 +1,8 @@
+[tools]
+go = "1.23"
+
+[env]
+# 项目级 env 默认（不含 secret）
+JE_AUTH_MODE = "bypass"
+JE_DATA_DIR = "{{config_root}}/data"
+JE_DATABASE_URL = "sqlite://{{config_root}}/data/jadeenvoy.db"

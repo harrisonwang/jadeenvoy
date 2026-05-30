@@ -1,0 +1,48 @@
+JadeEnvoy
+Copyright 2026 JadeEnvoy Contributors
+
+This product includes software developed at JadeEnvoy
+(https://jadeenvoy.com/).
+
+------------------------------------------------------------------------
+
+This product includes software forked from third-party projects, listed
+below with their respective licenses.
+
+## open-managed-agents (OMA)
+
+The JadeEnvoy Console (`ui/` directory) was forked from
+https://github.com/open-ma/open-managed-agents `apps/console/`
+at commit <PINNED-COMMIT-SHA>.
+
+OMA is licensed under the Apache License, Version 2.0.
+Copyright (c) Open Managed Agents contributors.
+
+See https://github.com/open-ma/open-managed-agents/blob/main/LICENSE
+for the full license text.
+
+------------------------------------------------------------------------
+
+This product depends on the following Go libraries (compile-time):
+
+- github.com/go-chi/chi/v5         (MIT)
+- github.com/jackc/pgx/v5          (MIT)
+- modernc.org/sqlite               (BSD-3-Clause)
+- github.com/elazarl/goproxy       (BSD-3-Clause)
+- github.com/spf13/cobra           (Apache-2.0)
+- github.com/pressly/goose/v3      (MIT)
+- github.com/oklog/ulid/v2         (Apache-2.0)
+- github.com/anthropics/anthropic-sdk-go  (MIT)
+- github.com/caarlos0/env/v10      (MIT)
+- github.com/go-playground/validator/v10  (MIT)
+- github.com/prometheus/client_golang     (Apache-2.0)
+- go.opentelemetry.io/otel         (Apache-2.0)
+- golang.org/x/crypto              (BSD-3-Clause)
+
+Run `go mod download && go list -m -json all | jq -r '.Path + " " + .Version'`
+for the exact pinned versions.
+
+------------------------------------------------------------------------
+
+For Console UI dependencies (`ui/package.json`), see `ui/NOTICE` after
+fork is performed.

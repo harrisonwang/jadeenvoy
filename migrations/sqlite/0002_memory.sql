@@ -1,0 +1,2 @@
+-- M2: Memory Stores
+-- (schema 也内联在 internal/store/store.go 的 sqliteSchema 里以保持单一来源)

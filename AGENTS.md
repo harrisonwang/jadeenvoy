@@ -116,12 +116,17 @@ RunTurn:
   在 API 边界用。
 - **JSON 列**: SQLite 用 `TEXT` + `CHECK(json_valid(...))`。PG 后续用 `JSONB`
   (M2)。V1 暂未引 sqlc，手写 SQL + prepared statement。
-- **Vault credential 唯一性**: `(vault_id, mcp_server_host)` 设计上 UNIQUE。
-  不要绕过 —— OMA "第一个匹配的胜出" 是坑
+- **Vault credential 唯一性**: `(vault_id, mcp_server_host)` UNIQUE —— 已落地为 SQLite
+  partial unique index（`WHERE archived_at IS NULL`）+ 应用层 409。`Resolve` 按 `created_at DESC`
+  取最新，规避 OMA "第一个匹配的胜出" 坑
   ([`.docs/00-motivation/oma-gaps-encountered.md`](.docs/00-motivation/oma-gaps-encountered.md) 第 9 条)。
-- **AUTH_MODE 三档**: `required` / `optional` / `bypass`。`bypass` 模式下
-  `/api/auth/*` 路由**仍然挂载**（返回虚拟 default user），让 Console 不会
-  崩。**不要像 OMA 那样按 mode 卸载整个路由**。
+  凭据 AES-256-GCM 存储；`je-vault` 是手写 stdlib MITM 代理，靠 `HTTPS_PROXY` userinfo 识别 session
+  ([ADR-0019](.docs/30-adr/0019-zero-dependency-crypto-and-proxy.md)）。
+- **AUTH_MODE 三档**: `required` / `optional` / `bypass`（[ADR-0013](.docs/30-adr/0013-auth.md)，已实现真鉴权）。
+  `RequireAuth` middleware 顺序：`x-api-key` → cookie session → bypass/optional 放行 → 401。
+  `bypass` 模式下 `/api/auth/*` 路由**仍然挂载**（返回虚拟 default user），让 Console 不会
+  崩。**不要像 OMA 那样按 mode 卸载整个路由**。密码 hash 用 stdlib `crypto/pbkdf2`、cookie HMAC-SHA256，
+  **零第三方依赖**（[ADR-0019](.docs/30-adr/0019-zero-dependency-crypto-and-proxy.md)）。
 
 ## 文档怎么查
 
@@ -130,7 +135,7 @@ RunTurn:
   milestone 的功能，需要 PR promote 才能加。
 - [`.docs/20-architecture/`](.docs/20-architecture/) — 系统设计、模块布局、
   API 表、数据模型。新人先看 `overview.md`。
-- [`.docs/30-adr/`](.docs/30-adr/) — 每个非平凡技术选型（18 篇 ADR）。
+- [`.docs/30-adr/`](.docs/30-adr/) — 每个非平凡技术选型（19 篇 ADR）。
   在提"换用 X 替代 Y"之前，先查是不是已经有 ADR 解释为啥选 Y。改决策必须新写
   一篇 ADR，**不要直接改老 ADR**。
 - [`.docs/40-implementation-notes/`](.docs/40-implementation-notes/) — 实现期间
@@ -156,18 +161,18 @@ RunTurn:
 
 ## 在这个仓库工作时
 
-- V1 MVP 已实现且 e2e 测试通过。代码量很小（~2,500 行 Go）且干净 ——
-  **不要做投机性重构**。
+- V1 运行时内核 + Vault/MITM 注入 + Auth(cookie/API key) 均已实现，e2e 测试通过
+  （~9k 行 Go 含测试）。代码干净 —— **不要做投机性重构**。Vault/Auth 的技术选型见
+  [ADR-0019](.docs/30-adr/0019-zero-dependency-crypto-and-proxy.md)（坚持零第三方依赖）。
 - 加功能时：**先在 `test/e2e/` 写/扩 e2e 测试**，看它失败，再写实现。Mock provider
   (`internal/provider/mock.go`) 就是为脚本化多轮流程设计的。
 - 写新 ADR 时拷贝 `.docs/30-adr/template.md` 续编号。不要改老 ADR（除了 status
   字段加 `Superseded by`）。
 - 用 `modernc.org/sqlite`（纯 Go、无 CGo）是**有意选择**，为了跨平台编译干净。
   **不要换成 `mattn/go-sqlite3`**。
-- 真实 LLM provider 实现是 M2 高优先级任务（V1 只有 mock）。加
-  `internal/provider/oaicompat/` 时**不要引 `go-openai`**（依赖太重），
-  自己写 thin client，详见
-  [`.docs/30-adr/0011-llm-provider-abstraction.md`](.docs/30-adr/0011-llm-provider-abstraction.md)。
+- LLM provider：已有 `mock` + `openai_compat` + `anthropic`/`anthropic_compat`，**全部自写 thin client**
+  （遵循 ADR-0019 零依赖：不引 `go-openai`、不引 `anthropic-sdk-go`）。`je` CLI 同理用 stdlib `flag`（不引 cobra）。
+  详见 [`.docs/30-adr/0011-llm-provider-abstraction.md`](.docs/30-adr/0011-llm-provider-abstraction.md)。
 
 ## 给各类 agentic 工具的兼容入口
 

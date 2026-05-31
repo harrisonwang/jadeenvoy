@@ -212,6 +212,50 @@ type CreateSkillRequest struct {
 	Files       []SkillFile `json:"files,omitempty"`
 }
 
+// ─── Vault (M1/ADR-0015) ───────────────────────────────────────────────────
+
+type Vault struct {
+	Type        string            `json:"type"`
+	ID          string            `json:"id"`
+	DisplayName string            `json:"display_name"`
+	Metadata    map[string]string `json:"metadata"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   *time.Time        `json:"updated_at"`
+	ArchivedAt  *time.Time        `json:"archived_at"`
+}
+
+type CreateVaultRequest struct {
+	DisplayName string            `json:"display_name"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// Credential 是 vault 凭据的响应形状。secret（token）永不返回。
+type Credential struct {
+	Type        string             `json:"type"`
+	ID          string             `json:"id"`
+	VaultID     string             `json:"vault_id"`
+	DisplayName string             `json:"display_name"`
+	Auth        CredentialAuthView `json:"auth"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+
+type CredentialAuthView struct {
+	Type         string `json:"type"`
+	MCPServerURL string `json:"mcp_server_url"`
+	// token 永不出现在响应里
+}
+
+type CreateCredentialRequest struct {
+	DisplayName string              `json:"display_name"`
+	Auth        CredentialAuthInput `json:"auth"`
+}
+
+type CredentialAuthInput struct {
+	Type         string `json:"type"` // V1 仅 "static_bearer"
+	MCPServerURL string `json:"mcp_server_url"`
+	Token        string `json:"token"`
+}
+
 // ─── List wrappers ────────────────────────────────────────────────────────
 
 type ListResponse[T any] struct {

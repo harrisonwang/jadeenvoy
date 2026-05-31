@@ -14,19 +14,21 @@
 
 > [中文 README](README.zh-CN.md)
 
-**Status: 🚧 Work in progress. V1 runtime core is implemented and covered by e2e tests; several M2 features are experimental.**
+**Status: 🚧 Work in progress. V1 runtime core, Vault + MITM credential injection, and Auth (cookie + API key) are implemented and covered by e2e tests; several M2 features are experimental.**
 
 Implemented today:
 
-- `jed` daemon with SQLite persistence, event log, SSE, metrics, mock and OpenAI-compatible providers.
+- `jed` daemon with SQLite persistence, event log, SSE, metrics, and LLM providers `mock` / `openai_compat` / `anthropic` / `anthropic_compat` (all hand-written thin clients, no SDK).
 - Agent/session runtime loop with subprocess sandbox and built-in `bash`, `read`, `write`, `edit`, `glob`, `grep` tools.
 - Core e2e flow: user message → model request → tool use → tool result → final agent message.
+- **Vault** (`static_bearer`) with AES-256-GCM storage, and the **`je-vault` HTTPS MITM proxy** that strips dummy client credentials and injects real tokens into sandbox egress.
+- **Auth**: cookie sessions + API keys with `AUTH_MODE` (`required`/`optional`/`bypass`) — all standard-library crypto, zero third-party deps (see ADR-0019).
+- **`je` CLI**: agents / sessions (with streaming `send`) / vaults / api-keys over REST — stdlib `flag`, no cobra.
 - Experimental M2 APIs for files, memory stores, skills, custom tools, session resources, and outbound webhooks.
 
 Not complete yet:
 
-- `je` CLI and `je-vault` MITM proxy are compileable placeholders only.
-- Vault credential CRUD/injection is not implemented; `/api/auth/*` currently supports bypass-mode Console compatibility only.
+- Console UI (fork of OMA), Postgres backend, the GitLab review adapter demo, and one-shot docker-compose are not started.
 - Some compatibility endpoints beyond the V1 runtime path may still be incomplete.
 
 JadeEnvoy is a managed-agents runtime: write an agent (model + system prompt
@@ -95,8 +97,8 @@ Detailed backlog: [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/).
 | Binary | Role |
 |---|---|
 | `jed` | Main daemon — REST API, agent orchestration, harness loop |
-| `je` | CLI client — placeholder, not implemented yet |
-| `je-vault` | HTTPS MITM proxy sidecar — placeholder, not implemented yet |
+| `je` | CLI client — agents/sessions/vaults/api-keys over REST (stdlib `flag`, ADR-0019) |
+| `je-vault` | HTTPS MITM proxy sidecar — injects vault credentials into sandbox egress (stdlib, ADR-0019) |
 
 ## Quick start
 

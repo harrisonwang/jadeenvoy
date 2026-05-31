@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -27,6 +28,10 @@ type Harness struct {
 	Tools    *tool.Registry
 	Memory   *memory.Service // 可空（V1 没 memory）
 	MaxSteps int             // 每个 turn 最多多少轮 LLM 调用
+
+	// Vault MITM 注入（可空）：设了 VaultProxyURL 就给沙箱注入 HTTPS_PROXY + CA 信任。
+	VaultProxyURL string
+	VaultCACert   string
 
 	turnMu sync.Map // sessionID -> *sync.Mutex，防同一 session 并发 RunTurn
 }
@@ -91,6 +96,9 @@ func (h *Harness) RunTurn(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("provision sandbox: %w", err)
 	}
 	defer sb.Close()
+
+	// Vault MITM：给沙箱出站注入 HTTPS_PROXY（session 编进 proxy userinfo）+ CA 信任。
+	h.injectVaultProxy(sb, sessionID)
 
 	// 挂载 agent skills 到沙箱，注入 SKILL.md 到 system prompt
 	skillExtras, err := h.mountSkills(ctx, sb, sess.AgentSnapshot)
@@ -287,4 +295,29 @@ func (h *Harness) RunTurn(ctx context.Context, sessionID string) error {
 	_, _ = h.Broker.Publish(ctx, sessionID, "session.status_idle", "primary", idlePayload)
 
 	return nil
+}
+
+// injectVaultProxy 给支持 SetEnv 的沙箱注入 vault MITM 代理 env。
+// session id 编进 proxy userinfo（HTTPS_PROXY=http://<sessionID>:x@host），
+// 代理据此查 session 的 vault 凭据 —— 无需改写沙箱里的每条 curl。
+func (h *Harness) injectVaultProxy(sb sandbox.Sandbox, sessionID string) {
+	if h.VaultProxyURL == "" {
+		return
+	}
+	proxyURL := h.VaultProxyURL
+	if u, err := url.Parse(h.VaultProxyURL); err == nil {
+		u.User = url.UserPassword(sessionID, "x")
+		proxyURL = u.String()
+	} else {
+		// 解析失败则注入无 session 标识的代理 URL，代理将无法识别 session —— 显式告警
+		obs.Logger().Warn("harness.vault_proxy.parse_failed", "url", h.VaultProxyURL, "err", err.Error())
+	}
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		sb.SetEnv(k, proxyURL)
+	}
+	if h.VaultCACert != "" {
+		for _, k := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"} {
+			sb.SetEnv(k, h.VaultCACert)
+		}
+	}
 }

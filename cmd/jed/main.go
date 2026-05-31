@@ -12,6 +12,7 @@ import (
 
 	"github.com/harrisonwang/jadeenvoy/internal/agent"
 	"github.com/harrisonwang/jadeenvoy/internal/api"
+	"github.com/harrisonwang/jadeenvoy/internal/auth"
 	"github.com/harrisonwang/jadeenvoy/internal/config"
 	"github.com/harrisonwang/jadeenvoy/internal/event"
 	"github.com/harrisonwang/jadeenvoy/internal/harness"
@@ -22,6 +23,7 @@ import (
 	"github.com/harrisonwang/jadeenvoy/internal/session"
 	"github.com/harrisonwang/jadeenvoy/internal/store"
 	"github.com/harrisonwang/jadeenvoy/internal/tool"
+	"github.com/harrisonwang/jadeenvoy/internal/vault"
 	"github.com/harrisonwang/jadeenvoy/internal/version"
 	"github.com/harrisonwang/jadeenvoy/internal/webhook"
 )
@@ -86,8 +88,19 @@ func run() error {
 	sessionSvc := session.New(st)
 	memorySvc := memory.New(st)
 	webhookSvc := webhook.New(st)
+	vaultSvc, err := vault.New(st, cfg.PlatformRootSecret)
+	if err != nil {
+		return fmt.Errorf("vault service: %w", err)
+	}
+	authSvc := auth.New(st, cfg.AuthMode, []byte(cfg.PlatformRootSecret))
+	if cfg.PlatformRootSecret == "" && cfg.AuthMode != "bypass" {
+		log.Warn("platform_root_secret.unset",
+			"msg", "PLATFORM_ROOT_SECRET not set; using insecure dev key for vault encryption + cookie signing")
+	}
 	hrns := harness.New(st, broker, prov, sbProvider, registry)
 	hrns.Memory = memorySvc
+	hrns.VaultProxyURL = cfg.VaultProxyURL
+	hrns.VaultCACert = cfg.VaultCACert
 
 	// 把 broker 事件路由给 webhook 投递队列（异步 enqueue）
 	broker.RegisterHook(func(ev event.Event) {
@@ -110,6 +123,8 @@ func run() error {
 		Session:  sessionSvc,
 		Memory:   memorySvc,
 		Webhook:  webhookSvc,
+		Vault:    vaultSvc,
+		Auth:     authSvc,
 		Harness:  hrns,
 		AuthMode: cfg.AuthMode,
 	}
@@ -150,8 +165,14 @@ func buildProvider(cfg *config.Config) (provider.Provider, error) {
 			return nil, fmt.Errorf("JE_LLM_BASE_URL required for openai_compat provider")
 		}
 		return provider.NewOAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey), nil
-	case "anthropic", "anthropic_compat":
-		return nil, fmt.Errorf("%s provider not implemented in V1; set JE_LLM_PROVIDER=mock", cfg.LLMProvider)
+	case "anthropic":
+		// base_url 空 → 默认 api.anthropic.com（官方）
+		return provider.NewAnthropic(cfg.LLMBaseURL, cfg.LLMAPIKey, "anthropic"), nil
+	case "anthropic_compat":
+		if cfg.LLMBaseURL == "" {
+			return nil, fmt.Errorf("JE_LLM_BASE_URL required for anthropic_compat provider")
+		}
+		return provider.NewAnthropic(cfg.LLMBaseURL, cfg.LLMAPIKey, "anthropic_compat"), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.LLMProvider)
 	}

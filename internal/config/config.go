@@ -28,6 +28,11 @@ type Config struct {
 	// Sandbox
 	SandboxKind string // subprocess / docker
 
+	// Vault MITM 代理（ADR-0006/0019）
+	VaultProxyAddr string // je-vault 监听地址，默认 :14322
+	VaultProxyURL  string // jed 注入沙箱的 HTTPS_PROXY（空 = 不启用注入）
+	VaultCACert    string // 注入沙箱的 CA 证书路径（SSL_CERT_FILE 等）
+
 	// 加密
 	PlatformRootSecret string // AES-GCM key 来源
 }
@@ -45,6 +50,10 @@ func Load() (*Config, error) {
 		LLMAPIKey:   os.Getenv("JE_LLM_API_KEY"),
 
 		SandboxKind: envOr("JE_SANDBOX_KIND", "subprocess"),
+
+		VaultProxyAddr: envOr("JE_VAULT_PROXY_ADDR", ":14322"),
+		VaultProxyURL:  os.Getenv("JE_VAULT_PROXY_URL"),
+		VaultCACert:    os.Getenv("JE_VAULT_CA_CERT"),
 
 		PlatformRootSecret: os.Getenv("PLATFORM_ROOT_SECRET"),
 	}

@@ -29,6 +29,8 @@ type ExecResult struct {
 type Sandbox interface {
 	Exec(ctx context.Context, cmd Command) (*ExecResult, error)
 	WriteFile(ctx context.Context, path string, content []byte) error
+	// SetEnv 设置沙箱默认环境变量（如 vault MITM 注入的 HTTPS_PROXY / CA）。
+	SetEnv(key, value string)
 	Close() error
 }
 

@@ -163,6 +163,9 @@ CREATE TABLE IF NOT EXISTS vault_credential (
 );
 CREATE INDEX IF NOT EXISTS vault_credential_vault ON vault_credential(vault_id);
 CREATE INDEX IF NOT EXISTS vault_credential_host ON vault_credential(tenant_id, mcp_server_host);
+-- 同 vault 同 host 只允许一条活跃凭据（ADR-0015 / oma-gaps 第 9 条）
+CREATE UNIQUE INDEX IF NOT EXISTS vault_credential_unique_host
+    ON vault_credential(vault_id, mcp_server_host) WHERE archived_at IS NULL;
 
 -- M2: Memory Stores ----------------------------------------------------------
 
@@ -258,4 +261,39 @@ CREATE TABLE IF NOT EXISTS skill (
     created_at          INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL
 );
+
+-- M1: Auth — users / sessions / API keys（ADR-0013） --------------------------
+
+CREATE TABLE IF NOT EXISTS app_user (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'tnt-default',
+    email           TEXT NOT NULL,
+    name            TEXT NOT NULL DEFAULT '',
+    password_hash   TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    UNIQUE (email)
+);
+
+CREATE TABLE IF NOT EXISTS auth_session (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    tenant_id       TEXT NOT NULL DEFAULT 'tnt-default',
+    expires_at      INTEGER NOT NULL,
+    created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_session_user ON auth_session(user_id);
+
+CREATE TABLE IF NOT EXISTS api_key (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'tnt-default',
+    user_id         TEXT,
+    name            TEXT NOT NULL DEFAULT '',
+    prefix          TEXT NOT NULL,
+    hash            TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    revoked_at      INTEGER,
+    UNIQUE (hash)
+);
+CREATE INDEX IF NOT EXISTS api_key_tenant ON api_key(tenant_id);
 `

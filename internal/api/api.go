@@ -9,11 +9,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/harrisonwang/jadeenvoy/internal/agent"
+	"github.com/harrisonwang/jadeenvoy/internal/auth"
 	"github.com/harrisonwang/jadeenvoy/internal/event"
 	"github.com/harrisonwang/jadeenvoy/internal/harness"
 	"github.com/harrisonwang/jadeenvoy/internal/memory"
 	"github.com/harrisonwang/jadeenvoy/internal/session"
 	"github.com/harrisonwang/jadeenvoy/internal/store"
+	"github.com/harrisonwang/jadeenvoy/internal/vault"
 	"github.com/harrisonwang/jadeenvoy/internal/webhook"
 )
 
@@ -24,6 +26,8 @@ type Deps struct {
 	Session  *session.Service
 	Memory   *memory.Service
 	Webhook  *webhook.Service
+	Vault    *vault.Service
+	Auth     *auth.Service
 	Harness  *harness.Harness
 	AuthMode string
 }
@@ -39,6 +43,7 @@ func NewRouter(d *Deps) http.Handler {
 	r.Handle("/metrics", promhttp.Handler())
 	MountAuthRoutes(r, d)
 	r.Route("/v1", func(r chi.Router) {
+		r.Use(RequireAuth(d))
 		r.Route("/agents", func(r chi.Router) {
 			r.Post("/", createAgent(d))
 			r.Get("/", listAgents(d))
@@ -82,10 +87,20 @@ func NewRouter(d *Deps) http.Handler {
 			r.Post("/", addSessionResource(d))
 			r.Delete("/{resId}", deleteSessionResource(d))
 		})
+		// Vaults (M1/ADR-0015)
+		if d.Vault != nil {
+			MountVaultRoutes(r, d.Vault)
+		}
 	})
-	if d.Webhook != nil {
+	if d.Webhook != nil || d.Auth != nil {
 		r.Route("/admin", func(r chi.Router) {
-			MountWebhookRoutes(r, d.Webhook)
+			r.Use(RequireAuth(d))
+			if d.Webhook != nil {
+				MountWebhookRoutes(r, d.Webhook)
+			}
+			if d.Auth != nil {
+				MountAPIKeyRoutes(r, d.Auth)
+			}
 		})
 	}
 	return r

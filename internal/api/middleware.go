@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -36,6 +37,76 @@ func loggingMW(next http.Handler) http.Handler {
 	})
 }
 
+// ─── Auth context ─────────────────────────────────────────────────────────
+
+type ctxKey int
+
+const (
+	ctxTenant ctxKey = iota
+	ctxUser
+)
+
+func withIdentity(ctx context.Context, tenant, user string) context.Context {
+	ctx = context.WithValue(ctx, ctxTenant, tenant)
+	ctx = context.WithValue(ctx, ctxUser, user)
+	return ctx
+}
+
+// tenantFromCtx 取请求关联的租户；未认证 / bypass 回退默认租户。
+func tenantFromCtx(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxTenant).(string); ok && v != "" {
+		return v
+	}
+	return "tnt-default"
+}
+
+// userFromCtx 取请求关联的用户 id（无主 API key 时为空）。
+func userFromCtx(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxUser).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// RequireAuth 是鉴权 middleware（ADR-0013）。解析顺序：
+//
+//  1. x-api-key header → 程序化调用
+//  2. cookie session   → 浏览器 Console
+//  3. bypass/optional  → 放行为 default 租户
+//  4. 否则 401
+//
+// 仅在 d.Auth 注入时挂载（保证旧测试与无 auth 装配路径行为不变）。
+func RequireAuth(d *Deps) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if d.Auth != nil {
+				if k := r.Header.Get("x-api-key"); k != "" {
+					if key, err := d.Auth.ResolveAPIKey(r.Context(), k); err == nil {
+						user := ""
+						if key.UserID.Valid {
+							user = key.UserID.String
+						}
+						next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), key.TenantID, user)))
+						return
+					}
+				}
+				if c, err := r.Cookie(d.Auth.CookieName()); err == nil {
+					if sess, u, err := d.Auth.ResolveSession(r.Context(), c.Value); err == nil {
+						next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), sess.TenantID, u.ID)))
+						return
+					}
+				}
+			}
+			// bypass / optional：未认证按默认租户放行（optional 解决 Console 混合场景）。
+			if d.AuthMode == "bypass" || d.AuthMode == "optional" {
+				next.ServeHTTP(w, r.WithContext(withIdentity(r.Context(), "tnt-default", bypassUserID)))
+				return
+			}
+			writeErr(w, 401, "authentication_error", "missing or invalid credentials")
+		})
+	}
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -61,9 +132,4 @@ func safeUploadPath(p string) bool {
 		}
 	}
 	return true
-}
-
-func tenantFromCtx(r *http.Request) string {
-	// V1 bypass: 默认租户
-	return "tnt-default"
 }

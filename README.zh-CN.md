@@ -18,15 +18,17 @@
 
 当前已实现：
 
-- `jed` 守护进程：SQLite 持久化、event log、SSE、metrics、mock 与 OpenAI-compatible provider。
+- `jed` 守护进程：SQLite 持久化、event log、SSE、metrics，以及 `mock` / `openai_compat` / `anthropic` / `anthropic_compat` provider。
 - Agent/session runtime loop：subprocess sandbox，内置 `bash`、`read`、`write`、`edit`、`glob`、`grep` 工具。
 - 核心 e2e 闭环：user message → model request → tool use → tool result → final agent message。
-- 实验性 M2 API：files、memory stores、skills、custom tools、session resources、outbound webhooks。
+- **Vault**：`static_bearer` 凭据、AES-256-GCM 存储，以及 `je-vault` HTTPS MITM proxy 凭据注入。
+- **Auth**：cookie session + API key，支持 `required` / `optional` / `bypass`。
+- **`je` CLI**：agents / sessions / vaults / api-keys 等 REST 操作，基于 stdlib `flag`。
+- 实验性 M2 API：files、memory stores、skills、session resources、outbound webhooks。
 
 尚未完成：
 
-- `je` CLI 与 `je-vault` MITM proxy 目前只是可编译占位。
-- Vault 凭据 CRUD / 注入尚未实现；`/api/auth/*` 目前只支持 bypass 模式下的 Console 兼容。
+- Console UI fork/productization、Postgres backend、GitLab review adapter demo、一键 docker-compose 体验尚未完成。
 - V1 runtime 路径之外的部分兼容端点可能仍不完整。
 
 JadeEnvoy 是一个 managed-agents 运行时：你写 agent（模型 + 系统提示词 + 工具），
@@ -56,7 +58,7 @@ JadeEnvoy 是 **Go 语言的清洁重新实现**，专注于：
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐
 │ Console UI   │    │   je CLI     │    │ Webhook adapter  │
-│  (React)     │    │  (cobra)     │    │  (GitLab/Slack…) │
+│  (planned)   │    │ stdlib flag  │    │   (planned)      │
 └──────┬───────┘    └──────┬───────┘    └─────────┬────────┘
        │                   │                      │
        └───────────────────┼──────────────────────┘
@@ -81,19 +83,19 @@ JadeEnvoy 是 **Go 语言的清洁重新实现**，专注于：
 
 | 里程碑 | 时间 | 主题 |
 |---|---|---|
-| **M1 — V1 MVP** | 4 周 | GitLab code review bot 端到端 |
-| **M2 — Post-MVP** | +2-3 月 | 完整工具集、Memory、Skills、MCP、Docker 沙箱、Webhook |
-| **M3 — Mature** | +6 月 | 多租户、OAuth 凭据、多 agent、UI 重写 |
+| **M1 — V1 runtime core** | 基本已实现 | Agent/session loop、subprocess sandbox、Vault/MITM、Auth、CLI |
+| **M2 — API / 产品化** | 进行中 | Files、Memory、Skills、resources、webhooks、OpenAPI、Console |
+| **M3 — Mature** | 后续 | 多租户、OAuth 凭据、多 agent、UI 重写 |
 
-详细 backlog: [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/)。
+当前状态与 backlog: [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/)。
 
 ## 组件
 
 | 二进制 | 角色 |
 |---|---|
 | `jed` | 主守护进程 —— REST API、agent 编排、harness 循环 |
-| `je` | CLI 客户端 —— 当前为占位，尚未实现 |
-| `je-vault` | HTTPS MITM 代理 sidecar —— 当前为占位，尚未实现 |
+| `je` | CLI 客户端 —— agents/sessions/vaults/api-keys over REST（stdlib `flag`） |
+| `je-vault` | HTTPS MITM 代理 sidecar —— 向 sandbox egress 注入 vault 凭据 |
 
 ## 快速开始
 
@@ -123,7 +125,7 @@ go run ./cmd/jed
 - **用户文档** —— V1 发版时一起出（`docs/`，发布到 `docs.jadeenvoy.com`）
 - **内部工程文档** —— [`.docs/`](.docs/)
   - [动机](.docs/00-motivation/)
-  - [按里程碑组织的功能 backlog](.docs/10-feature-backlog/)
+  - [功能状态 / backlog](.docs/10-feature-backlog/)
   - [架构](.docs/20-architecture/)
   - [ADR](.docs/30-adr/)
   - [实现笔记](.docs/40-implementation-notes/)

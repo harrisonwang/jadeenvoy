@@ -61,7 +61,7 @@ for the full rationale.
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐
 │ Console UI   │    │   je CLI     │    │ Webhook adapter  │
-│  (React)     │    │  (cobra)     │    │  (GitLab/Slack…) │
+│  (planned)   │    │ stdlib flag  │    │   (planned)      │
 └──────┬───────┘    └──────┬───────┘    └─────────┬────────┘
        │                   │                      │
        └───────────────────┼──────────────────────┘
@@ -86,11 +86,11 @@ Details: [`.docs/20-architecture/overview.md`](.docs/20-architecture/overview.md
 
 | Milestone | Window | Theme |
 |---|---|---|
-| **M1 — V1 MVP** | 4 weeks | GitLab code review bot, end-to-end |
-| **M2 — Post-MVP** | +2-3 months | Full tools, Memory, Skills, MCP, Docker sandbox, Webhooks |
-| **M3 — Mature** | +6 months | Multi-tenant, OAuth credentials, Multi-agent, UI rewrite |
+| **M1 — V1 runtime core** | Mostly implemented | Agent/session loop, subprocess sandbox, Vault/MITM, Auth, CLI |
+| **M2 — API/productization** | In progress | Files, Memory, Skills, resources, webhooks, OpenAPI, Console |
+| **M3 — Mature** | Later | Multi-tenant, OAuth credentials, Multi-agent, UI rewrite |
 
-Detailed backlog: [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/).
+Current status and backlog: [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/).
 
 ## Components
 
@@ -128,7 +128,7 @@ go run ./cmd/jed
 - **User docs** — coming with V1 ship (`docs/`, published to `docs.jadeenvoy.com`)
 - **Internal docs (engineering)** — [`.docs/`](.docs/)
   - [Motivation](.docs/00-motivation/)
-  - [Feature backlog by milestone](.docs/10-feature-backlog/)
+  - [Feature backlog / current status](.docs/10-feature-backlog/)
   - [Architecture](.docs/20-architecture/)
   - [ADRs](.docs/30-adr/)
   - [Implementation notes](.docs/40-implementation-notes/)

@@ -34,7 +34,7 @@ func (s *Store) CreateVault(ctx context.Context, tenantID, displayName string, m
 	}
 	id := NewID("vlt")
 	now := time.Now().UTC().UnixMilli()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO vault (id, tenant_id, display_name, metadata, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		id, tenantID, displayName, string(metadata), now, now,
@@ -45,7 +45,7 @@ func (s *Store) CreateVault(ctx context.Context, tenantID, displayName string, m
 }
 
 func (s *Store) GetVault(ctx context.Context, tenantID, id string) (*VaultRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, tenant_id, display_name, metadata, archived_at, created_at, updated_at
 		 FROM vault WHERE id = ? AND tenant_id = ?`, id, tenantID)
 	r := &VaultRow{}
@@ -67,7 +67,7 @@ func (s *Store) ListVaults(ctx context.Context, tenantID string, limit int) ([]*
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id FROM vault WHERE tenant_id = ? AND archived_at IS NULL
 		 ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
 	if err != nil {
@@ -91,7 +91,7 @@ func (s *Store) ListVaults(ctx context.Context, tenantID string, limit int) ([]*
 
 func (s *Store) ArchiveVault(ctx context.Context, tenantID, id string) error {
 	now := time.Now().UTC().UnixMilli()
-	res, err := s.DB.ExecContext(ctx, `UPDATE vault SET archived_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND archived_at IS NULL`, now, now, id, tenantID)
+	res, err := s.exec(ctx, `UPDATE vault SET archived_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND archived_at IS NULL`, now, now, id, tenantID)
 	if err != nil {
 		return err
 	}
@@ -101,8 +101,26 @@ func (s *Store) ArchiveVault(ctx context.Context, tenantID, id string) error {
 	return nil
 }
 
+func (s *Store) UpdateVault(ctx context.Context, tenantID, id, displayName string, metadata json.RawMessage) (*VaultRow, error) {
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC().UnixMilli()
+	res, err := s.exec(ctx,
+		`UPDATE vault SET display_name = ?, metadata = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND archived_at IS NULL`,
+		displayName, string(metadata), now, id, tenantID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	return s.GetVault(ctx, tenantID, id)
+}
+
 func (s *Store) DeleteVault(ctx context.Context, tenantID, id string) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM vault WHERE id = ? AND tenant_id = ?`, id, tenantID)
+	res, err := s.exec(ctx, `DELETE FROM vault WHERE id = ? AND tenant_id = ?`, id, tenantID)
 	if err != nil {
 		return err
 	}
@@ -142,6 +160,19 @@ type CreateCredentialInput struct {
 	CipherLabel   string
 }
 
+type UpdateCredentialInput struct {
+	ID            string
+	VaultID       string
+	TenantID      string
+	DisplayName   string
+	AuthType      string
+	MCPServerURL  string
+	MCPServerHost string
+	Cipher        []byte
+	CipherNonce   []byte
+	CipherLabel   string
+}
+
 // CreateCredential 插入凭据。同一 vault 同 host 已有活跃凭据时返回 ErrConflict
 // （DB 层也有 partial unique index 兜底，见 ADR-0015 / oma-gaps 第 9 条）。
 func (s *Store) CreateCredential(ctx context.Context, in CreateCredentialInput) (*CredentialRow, error) {
@@ -153,7 +184,7 @@ func (s *Store) CreateCredential(ctx context.Context, in CreateCredentialInput) 
 
 	// 应用层先查，给出友好错误（DB partial unique index 兜底防并发）。
 	var existing int
-	if err := s.DB.QueryRowContext(ctx,
+	if err := s.queryRow(ctx,
 		`SELECT COUNT(1) FROM vault_credential
 		 WHERE vault_id = ? AND mcp_server_host = ? AND archived_at IS NULL`,
 		in.VaultID, in.MCPServerHost).Scan(&existing); err != nil {
@@ -163,7 +194,7 @@ func (s *Store) CreateCredential(ctx context.Context, in CreateCredentialInput) 
 		return nil, ErrConflict
 	}
 
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO vault_credential (id, vault_id, tenant_id, display_name, auth_type,
 		    mcp_server_url, mcp_server_host, cipher, cipher_nonce, cipher_label, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -176,15 +207,24 @@ func (s *Store) CreateCredential(ctx context.Context, in CreateCredentialInput) 
 }
 
 func (s *Store) GetCredential(ctx context.Context, id string) (*CredentialRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, vault_id, tenant_id, display_name, auth_type, mcp_server_url, mcp_server_host,
 		        cipher, cipher_nonce, cipher_label, archived_at, created_at, updated_at
 		 FROM vault_credential WHERE id = ?`, id)
 	return scanCredential(row)
 }
 
+func (s *Store) GetCredentialScoped(ctx context.Context, tenantID, vaultID, id string) (*CredentialRow, error) {
+	row := s.queryRow(ctx,
+		`SELECT id, vault_id, tenant_id, display_name, auth_type, mcp_server_url, mcp_server_host,
+		        cipher, cipher_nonce, cipher_label, archived_at, created_at, updated_at
+		 FROM vault_credential WHERE id = ? AND vault_id = ? AND tenant_id = ?`,
+		id, vaultID, tenantID)
+	return scanCredential(row)
+}
+
 func (s *Store) ListCredentialsByVault(ctx context.Context, tenantID, vaultID string) ([]*CredentialRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, vault_id, tenant_id, display_name, auth_type, mcp_server_url, mcp_server_host,
 		        cipher, cipher_nonce, cipher_label, archived_at, created_at, updated_at
 		 FROM vault_credential WHERE vault_id = ? AND tenant_id = ? AND archived_at IS NULL
@@ -202,6 +242,55 @@ func (s *Store) ListCredentialsByVault(ctx context.Context, tenantID, vaultID st
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) UpdateCredential(ctx context.Context, in UpdateCredentialInput) (*CredentialRow, error) {
+	if in.TenantID == "" {
+		in.TenantID = "tnt-default"
+	}
+	var existing int
+	if err := s.queryRow(ctx,
+		`SELECT COUNT(1) FROM vault_credential
+		 WHERE vault_id = ? AND mcp_server_host = ? AND archived_at IS NULL AND id <> ?`,
+		in.VaultID, in.MCPServerHost, in.ID).Scan(&existing); err != nil {
+		return nil, err
+	}
+	if existing > 0 {
+		return nil, ErrConflict
+	}
+	now := time.Now().UTC().UnixMilli()
+	res, err := s.exec(ctx,
+		`UPDATE vault_credential
+		 SET display_name = ?, auth_type = ?, mcp_server_url = ?, mcp_server_host = ?,
+		     cipher = ?, cipher_nonce = ?, cipher_label = ?, updated_at = ?
+		 WHERE id = ? AND vault_id = ? AND tenant_id = ? AND archived_at IS NULL`,
+		in.DisplayName, in.AuthType, in.MCPServerURL, in.MCPServerHost,
+		in.Cipher, in.CipherNonce, in.CipherLabel, now,
+		in.ID, in.VaultID, in.TenantID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrNotFound
+	}
+	return s.GetCredentialScoped(ctx, in.TenantID, in.VaultID, in.ID)
+}
+
+func (s *Store) ArchiveCredential(ctx context.Context, tenantID, vaultID, id string) error {
+	now := time.Now().UTC().UnixMilli()
+	res, err := s.exec(ctx,
+		`UPDATE vault_credential SET archived_at = ?, updated_at = ?
+		 WHERE id = ? AND vault_id = ? AND tenant_id = ? AND archived_at IS NULL`,
+		now, now, id, vaultID, tenantID,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ListActiveCredentialsByHost 返回某租户下指定 vault 集合里匹配 host 的活跃凭据，
@@ -225,7 +314,7 @@ func (s *Store) ListActiveCredentialsByHost(ctx context.Context, tenantID string
 		 WHERE vault_id IN (%s) AND mcp_server_host = ? AND tenant_id = ? AND archived_at IS NULL
 		 ORDER BY created_at DESC`,
 		strings.Join(placeholders, ", "))
-	rows, err := s.DB.QueryContext(ctx, q, args...)
+	rows, err := s.query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +332,7 @@ func (s *Store) ListActiveCredentialsByHost(ctx context.Context, tenantID string
 
 // DeleteCredential 删除凭据，强制校验它属于指定 vault 与租户（防跨租户/跨 vault 越权删除）。
 func (s *Store) DeleteCredential(ctx context.Context, tenantID, vaultID, id string) error {
-	res, err := s.DB.ExecContext(ctx,
+	res, err := s.exec(ctx,
 		`DELETE FROM vault_credential WHERE id = ? AND vault_id = ? AND tenant_id = ?`, id, vaultID, tenantID)
 	if err != nil {
 		return err

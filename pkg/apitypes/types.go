@@ -34,11 +34,21 @@ func (m *AgentModel) UnmarshalJSON(data []byte) error {
 
 type ToolEntry struct {
 	Type          string          `json:"type"`
-	Name          string          `json:"name,omitempty"`         // for custom
+	Name          string          `json:"name,omitempty"` // for custom
+	MCPServerName string          `json:"mcp_server_name,omitempty"`
 	Description   string          `json:"description,omitempty"`  // for custom
 	InputSchema   json.RawMessage `json:"input_schema,omitempty"` // for custom
 	Configs       json.RawMessage `json:"configs,omitempty"`      // toolset 子工具配置
 	DefaultConfig json.RawMessage `json:"default_config,omitempty"`
+}
+
+type AgentGuardrails struct {
+	ToolPermissions *ToolPermissionPolicy `json:"tool_permissions,omitempty"`
+}
+
+type ToolPermissionPolicy struct {
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	DeniedTools  []string `json:"denied_tools,omitempty"`
 }
 
 type Agent struct {
@@ -52,6 +62,7 @@ type Agent struct {
 	Skills      []json.RawMessage `json:"skills"`
 	MCPServers  []json.RawMessage `json:"mcp_servers"`
 	Multiagent  json.RawMessage   `json:"multiagent,omitempty"`
+	Guardrails  *AgentGuardrails  `json:"guardrails,omitempty"`
 	Metadata    map[string]string `json:"metadata"`
 	Version     int               `json:"version"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -65,7 +76,10 @@ type CreateAgentRequest struct {
 	System      string            `json:"system,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Tools       []ToolEntry       `json:"tools"`
+	MCPServers  []json.RawMessage `json:"mcp_servers,omitempty"`
 	Skills      []json.RawMessage `json:"skills,omitempty"`
+	Multiagent  json.RawMessage   `json:"multiagent,omitempty"`
+	Guardrails  *AgentGuardrails  `json:"guardrails,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
@@ -75,7 +89,10 @@ type UpdateAgentRequest struct {
 	System      string            `json:"system,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Tools       []ToolEntry       `json:"tools"`
+	MCPServers  []json.RawMessage `json:"mcp_servers,omitempty"`
 	Skills      []json.RawMessage `json:"skills,omitempty"`
+	Multiagent  json.RawMessage   `json:"multiagent,omitempty"`
+	Guardrails  *AgentGuardrails  `json:"guardrails,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 	Version     int               `json:"version"`
 }
@@ -151,6 +168,23 @@ type ResourceEntry struct {
 	Instructions  string `json:"instructions,omitempty"`
 	FileID        string `json:"file_id,omitempty"`
 	MountPath     string `json:"mount_path,omitempty"`
+}
+
+// ─── Environments ────────────────────────────────────────────────────────────
+
+type Environment struct {
+	Type       string          `json:"type"` // "environment"
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Config     json.RawMessage `json:"config"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  *time.Time      `json:"updated_at"`
+	ArchivedAt *time.Time      `json:"archived_at"`
+}
+
+type CreateEnvironmentRequest struct {
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config"`
 }
 
 // ─── Events ────────────────────────────────────────────────────────────────
@@ -237,6 +271,8 @@ type Credential struct {
 	DisplayName string             `json:"display_name"`
 	Auth        CredentialAuthView `json:"auth"`
 	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   *time.Time         `json:"updated_at"`
+	ArchivedAt  *time.Time         `json:"archived_at"`
 }
 
 type CredentialAuthView struct {
@@ -251,9 +287,25 @@ type CreateCredentialRequest struct {
 }
 
 type CredentialAuthInput struct {
-	Type         string `json:"type"` // V1 仅 "static_bearer"
-	MCPServerURL string `json:"mcp_server_url"`
-	Token        string `json:"token"`
+	Type         string                       `json:"type"` // static_bearer / mcp_oauth
+	MCPServerURL string                       `json:"mcp_server_url"`
+	Token        string                       `json:"token"`
+	AccessToken  string                       `json:"access_token"`
+	ExpiresAt    string                       `json:"expires_at"`
+	Refresh      *CredentialOAuthRefreshInput `json:"refresh,omitempty"`
+}
+
+type CredentialOAuthRefreshInput struct {
+	TokenEndpoint     string                        `json:"token_endpoint"`
+	ClientID          string                        `json:"client_id"`
+	Scope             string                        `json:"scope,omitempty"`
+	RefreshToken      string                        `json:"refresh_token"`
+	TokenEndpointAuth CredentialOAuthEndpointAuthIn `json:"token_endpoint_auth"`
+}
+
+type CredentialOAuthEndpointAuthIn struct {
+	Type         string `json:"type"` // none / client_secret_basic / client_secret_post
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 // ─── List wrappers ────────────────────────────────────────────────────────

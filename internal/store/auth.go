@@ -32,7 +32,7 @@ func (s *Store) CreateUser(ctx context.Context, in CreateUserInput) (*UserRow, e
 		in.TenantID = "tnt-default"
 	}
 	var exists int
-	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM app_user WHERE email = ?`, in.Email).Scan(&exists); err != nil {
+	if err := s.queryRow(ctx, `SELECT COUNT(1) FROM app_user WHERE email = ?`, in.Email).Scan(&exists); err != nil {
 		return nil, err
 	}
 	if exists > 0 {
@@ -40,7 +40,7 @@ func (s *Store) CreateUser(ctx context.Context, in CreateUserInput) (*UserRow, e
 	}
 	id := NewID("usr")
 	now := time.Now().UTC().UnixMilli()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO app_user (id, tenant_id, email, name, password_hash, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, in.TenantID, in.Email, in.Name, in.PasswordHash, now, now,
@@ -51,13 +51,13 @@ func (s *Store) CreateUser(ctx context.Context, in CreateUserInput) (*UserRow, e
 }
 
 func (s *Store) GetUser(ctx context.Context, id string) (*UserRow, error) {
-	return scanUser(s.DB.QueryRowContext(ctx,
+	return scanUser(s.queryRow(ctx,
 		`SELECT id, tenant_id, email, name, password_hash, created_at, updated_at
 		 FROM app_user WHERE id = ?`, id))
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*UserRow, error) {
-	return scanUser(s.DB.QueryRowContext(ctx,
+	return scanUser(s.queryRow(ctx,
 		`SELECT id, tenant_id, email, name, password_hash, created_at, updated_at
 		 FROM app_user WHERE email = ?`, email))
 }
@@ -88,7 +88,7 @@ type AuthSessionRow struct {
 
 func (s *Store) CreateAuthSession(ctx context.Context, id, userID, tenantID string, expiresAtMs int64) error {
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`INSERT INTO auth_session (id, user_id, tenant_id, expires_at, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		id, userID, tenantID, expiresAtMs, now)
@@ -98,7 +98,7 @@ func (s *Store) CreateAuthSession(ctx context.Context, id, userID, tenantID stri
 func (s *Store) GetAuthSession(ctx context.Context, id string) (*AuthSessionRow, error) {
 	r := &AuthSessionRow{}
 	var createdMs int64
-	if err := s.DB.QueryRowContext(ctx,
+	if err := s.queryRow(ctx,
 		`SELECT id, user_id, tenant_id, expires_at, created_at FROM auth_session WHERE id = ?`, id,
 	).Scan(&r.ID, &r.UserID, &r.TenantID, &r.ExpiresAt, &createdMs); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -111,7 +111,7 @@ func (s *Store) GetAuthSession(ctx context.Context, id string) (*AuthSessionRow,
 }
 
 func (s *Store) DeleteAuthSession(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM auth_session WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM auth_session WHERE id = ?`, id)
 	return err
 }
 
@@ -142,7 +142,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, in CreateAPIKeyInput) (*APIKey
 	}
 	id := NewID("key")
 	now := time.Now().UTC().UnixMilli()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO api_key (id, tenant_id, user_id, name, prefix, hash, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, in.TenantID, nullStr(in.UserID), in.Name, in.Prefix, in.Hash, now,
@@ -153,20 +153,20 @@ func (s *Store) CreateAPIKey(ctx context.Context, in CreateAPIKeyInput) (*APIKey
 }
 
 func (s *Store) GetAPIKey(ctx context.Context, id string) (*APIKeyRow, error) {
-	return scanAPIKey(s.DB.QueryRowContext(ctx,
+	return scanAPIKey(s.queryRow(ctx,
 		`SELECT id, tenant_id, user_id, name, prefix, hash, created_at, revoked_at
 		 FROM api_key WHERE id = ?`, id))
 }
 
 // GetAPIKeyByHash 按 hash 查找未撤销的 key。
 func (s *Store) GetAPIKeyByHash(ctx context.Context, hash string) (*APIKeyRow, error) {
-	return scanAPIKey(s.DB.QueryRowContext(ctx,
+	return scanAPIKey(s.queryRow(ctx,
 		`SELECT id, tenant_id, user_id, name, prefix, hash, created_at, revoked_at
 		 FROM api_key WHERE hash = ? AND revoked_at IS NULL`, hash))
 }
 
 func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]*APIKeyRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, tenant_id, user_id, name, prefix, hash, created_at, revoked_at
 		 FROM api_key WHERE tenant_id = ? AND revoked_at IS NULL
 		 ORDER BY created_at DESC`, tenantID)
@@ -187,7 +187,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string) ([]*APIKeyRow,
 
 func (s *Store) RevokeAPIKey(ctx context.Context, id string) error {
 	now := time.Now().UTC().UnixMilli()
-	res, err := s.DB.ExecContext(ctx, `UPDATE api_key SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, id)
+	res, err := s.exec(ctx, `UPDATE api_key SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now, id)
 	if err != nil {
 		return err
 	}

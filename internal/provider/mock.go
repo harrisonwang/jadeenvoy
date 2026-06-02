@@ -14,6 +14,14 @@ type MockScript struct {
 
 	// Events 按序发出，最后必须以 StopReason 结束
 	Events []ChatEvent
+
+	// Err 非空时 Stream 直接返回它（模拟连接级错误，如 HTTP 4xx/5xx）。
+	Err error
+
+	// Once 为真时本 script 命中一次后失效（模拟"重试后恢复"）。
+	Once bool
+
+	used bool
 }
 
 // MockProvider 用脚本化响应实现 Provider，供测试用。
@@ -89,6 +97,55 @@ func (m *MockProvider) AppendFinalAfterTool(text string) *MockProvider {
 	})
 }
 
+// compactionMarker 标识一次 compaction 摘要调用（来自 harness compactionSystemPrompt）。
+const compactionMarker = "compaction assistant"
+
+// AppendSummary 是 helper：仅匹配 compaction 摘要轮（system 含 marker），返回摘要文本。
+func (m *MockProvider) AppendSummary(text string) *MockProvider {
+	return m.Append(MockScript{
+		Match: func(req ChatRequest) bool {
+			return strings.Contains(req.System, compactionMarker)
+		},
+		Events: []ChatEvent{
+			TextDelta{Text: text},
+			StopReason{Reason: "end_turn", Usage: Usage{InputTokens: 50, OutputTokens: int64(len(text))}},
+		},
+	})
+}
+
+// AppendError 是 helper：无条件返回一个连接级错误（如 APIError），用于测试错误处理。
+func (m *MockProvider) AppendError(err error) *MockProvider {
+	return m.Append(MockScript{
+		Match: func(req ChatRequest) bool { return true },
+		Err:   err,
+	})
+}
+
+// AppendErrorOnce 是 helper：仅第一次命中时返回错误，之后失效（模拟瞬时错误后恢复）。
+func (m *MockProvider) AppendErrorOnce(err error) *MockProvider {
+	return m.Append(MockScript{
+		Match: func(req ChatRequest) bool { return true },
+		Err:   err,
+		Once:  true,
+	})
+}
+
+// AppendAlwaysToolUse 是 helper：每轮都返回 tool_use（非摘要轮），让 agent 永不自然结束，
+// 用于触发 MaxSteps 上限。
+func (m *MockProvider) AppendAlwaysToolUse(toolName string, input map[string]any) *MockProvider {
+	inputJSON, _ := json.Marshal(input)
+	return m.Append(MockScript{
+		Match: func(req ChatRequest) bool {
+			return !strings.Contains(req.System, compactionMarker)
+		},
+		Events: []ChatEvent{
+			ToolUseStart{ID: "call_loop", Name: toolName},
+			ToolUseDelta{ID: "call_loop", InputJSON: string(inputJSON)},
+			StopReason{Reason: "tool_use", Usage: Usage{InputTokens: 20, OutputTokens: 5}},
+		},
+	})
+}
+
 func (m *MockProvider) Name() string { return "mock" }
 
 func (m *MockProvider) Stream(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error) {
@@ -96,14 +153,26 @@ func (m *MockProvider) Stream(ctx context.Context, req ChatRequest) (<-chan Chat
 	defer m.mu.Unlock()
 	m.called++
 
-	// 找匹配的 script
+	// 找匹配的 script（跳过已用尽的 Once script）
 	var chosen *MockScript
 	for i := range m.scripts {
+		if m.scripts[i].used {
+			continue
+		}
 		if m.scripts[i].Match(req) {
 			chosen = &m.scripts[i]
+			if m.scripts[i].Once {
+				m.scripts[i].used = true
+			}
 			break
 		}
 	}
+
+	// 连接级错误：直接返回 error，不开 channel（模拟 provider.Stream 早失败）。
+	if chosen != nil && chosen.Err != nil {
+		return nil, chosen.Err
+	}
+
 	ch := make(chan ChatEvent, 8)
 	go func() {
 		defer close(ch)
@@ -131,6 +200,3 @@ func (m *MockProvider) CalledCount() int {
 	defer m.mu.Unlock()
 	return m.called
 }
-
-// 防 unused
-var _ = strings.HasPrefix

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -65,6 +67,10 @@ func run() error {
 	// Broker
 	broker := event.NewBroker(st)
 
+	// 启动恢复：进程上次崩溃时仍在 running/rescheduling 的 session 没人接管，
+	// 标记 terminated 并补发终态事件（保持 event log 真相源），避免永久僵尸。
+	recoverInterruptedSessions(ctx, st, broker, log)
+
 	// Provider
 	prov, err := buildProvider(cfg)
 	if err != nil {
@@ -73,6 +79,7 @@ func run() error {
 
 	// Sandbox
 	sbProvider := sandbox.NewLocalSubprocessProvider(filepath.Join(cfg.DataDir, "sandboxes"))
+	sbProvider.KeepWorkdir = cfg.SandboxKeepWorkdir
 
 	// Tools
 	registry := tool.NewRegistry()
@@ -88,6 +95,7 @@ func run() error {
 	sessionSvc := session.New(st)
 	memorySvc := memory.New(st)
 	webhookSvc := webhook.New(st)
+	webhookSvc.AllowPrivate = cfg.WebhookAllowPrivate
 	vaultSvc, err := vault.New(st, cfg.PlatformRootSecret)
 	if err != nil {
 		return fmt.Errorf("vault service: %w", err)
@@ -101,6 +109,18 @@ func run() error {
 	hrns.Memory = memorySvc
 	hrns.VaultProxyURL = cfg.VaultProxyURL
 	hrns.VaultCACert = cfg.VaultCACert
+	hrns.CompactThresholdTokens = cfg.CompactThresholdTokens
+	hrns.KeepRecentTurns = cfg.KeepRecentTurns
+	hrns.MaxRetries = cfg.LLMMaxRetries
+	hrns.RetryBackoff = time.Duration(cfg.LLMRetryBackoffMS) * time.Millisecond
+	// MCP 静态鉴权（ADR-0026）：按 host 解析 vault static_bearer 注入 Authorization。
+	hrns.VaultResolveToken = func(ctx context.Context, tenantID string, vaultIDs []string, host string) string {
+		rc, err := vaultSvc.Resolve(ctx, tenantID, vaultIDs, host)
+		if err != nil || rc == nil {
+			return ""
+		}
+		return rc.Token
+	}
 
 	// 把 broker 事件路由给 webhook 投递队列（异步 enqueue）
 	broker.RegisterHook(func(ev event.Event) {
@@ -117,16 +137,18 @@ func run() error {
 
 	// HTTP
 	deps := &api.Deps{
-		Store:    st,
-		Broker:   broker,
-		Agent:    agentSvc,
-		Session:  sessionSvc,
-		Memory:   memorySvc,
-		Webhook:  webhookSvc,
-		Vault:    vaultSvc,
-		Auth:     authSvc,
-		Harness:  hrns,
-		AuthMode: cfg.AuthMode,
+		Store:             st,
+		Broker:            broker,
+		Agent:             agentSvc,
+		Session:           sessionSvc,
+		Memory:            memorySvc,
+		Webhook:           webhookSvc,
+		Vault:             vaultSvc,
+		Auth:              authSvc,
+		Harness:           hrns,
+		AuthMode:          cfg.AuthMode,
+		LLMProvider:       cfg.LLMProvider,
+		DefaultAgentModel: cfg.DefaultAgentModel,
 	}
 	r := api.NewRouter(deps)
 	srv := &http.Server{
@@ -175,5 +197,34 @@ func buildProvider(cfg *config.Config) (provider.Provider, error) {
 		return provider.NewAnthropic(cfg.LLMBaseURL, cfg.LLMAPIKey, "anthropic_compat"), nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.LLMProvider)
+	}
+}
+
+// recoverInterruptedSessions 把上次进程未干净结束、仍处于 running/rescheduling 的 session
+// 标记 terminated，并通过 broker 补发 session.status_terminated 事件（保持 event log 真相源）。
+func recoverInterruptedSessions(ctx context.Context, st *store.Store, broker *event.Broker, log *slog.Logger) {
+	ids, err := st.ListSessionsByStatus(ctx, "running", "rescheduling")
+	if err != nil {
+		log.Warn("recover.list.failed", "err", err.Error())
+		return
+	}
+	for _, id := range ids {
+		if err := st.MarkSessionTerminated(ctx, id); err != nil {
+			log.Warn("recover.mark.failed", "session_id", id, "err", err.Error())
+			continue
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"type": "session.status_terminated",
+			"error": map[string]string{
+				"type":    "interrupted",
+				"message": "session was interrupted by a daemon restart",
+			},
+		})
+		if _, err := broker.Publish(ctx, id, "session.status_terminated", "primary", payload); err != nil {
+			log.Warn("recover.publish.failed", "session_id", id, "err", err.Error())
+		}
+	}
+	if len(ids) > 0 {
+		log.Info("recover.done", "terminated_sessions", len(ids))
 	}
 }

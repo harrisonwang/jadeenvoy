@@ -11,16 +11,16 @@ import (
 // ─── Webhook endpoint ─────────────────────────────────────────────────────
 
 type WebhookEndpointRow struct {
-	ID                   string
-	TenantID             string
-	URL                  string
-	EventTypes           json.RawMessage // ["session.status_idled", ...]
-	SigningSecret        string
-	DisabledAt           sql.NullInt64
-	DisabledReason       sql.NullString
-	ConsecutiveFailures  int
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                  string
+	TenantID            string
+	URL                 string
+	EventTypes          json.RawMessage // ["session.status_idle", ...]
+	SigningSecret       string
+	DisabledAt          sql.NullInt64
+	DisabledReason      sql.NullString
+	ConsecutiveFailures int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type CreateWebhookEndpointInput struct {
@@ -40,7 +40,7 @@ func (s *Store) CreateWebhookEndpoint(ctx context.Context, in CreateWebhookEndpo
 	if len(types) == 0 || string(types) == "null" {
 		types = []byte(`[]`)
 	}
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO webhook_endpoint (id, tenant_id, url, event_types, signing_secret, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, in.TenantID, in.URL, string(types), in.SigningSecret, now, now,
@@ -51,7 +51,7 @@ func (s *Store) CreateWebhookEndpoint(ctx context.Context, in CreateWebhookEndpo
 }
 
 func (s *Store) GetWebhookEndpoint(ctx context.Context, id string) (*WebhookEndpointRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, tenant_id, url, event_types, signing_secret, disabled_at, disabled_reason,
 		        consecutive_failures, created_at, updated_at
 		 FROM webhook_endpoint WHERE id = ?`, id)
@@ -72,7 +72,7 @@ func (s *Store) GetWebhookEndpoint(ctx context.Context, id string) (*WebhookEndp
 }
 
 func (s *Store) ListWebhookEndpointsByEventType(ctx context.Context, tenantID, eventType string) ([]*WebhookEndpointRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id FROM webhook_endpoint
 		 WHERE tenant_id = ? AND disabled_at IS NULL`, tenantID)
 	if err != nil {
@@ -107,7 +107,7 @@ func (s *Store) ListWebhookEndpointsByEventType(ctx context.Context, tenantID, e
 }
 
 func (s *Store) ListWebhookEndpoints(ctx context.Context, tenantID string) ([]*WebhookEndpointRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id FROM webhook_endpoint WHERE tenant_id = ? ORDER BY created_at DESC`,
 		tenantID)
 	if err != nil {
@@ -130,19 +130,19 @@ func (s *Store) ListWebhookEndpoints(ctx context.Context, tenantID string) ([]*W
 }
 
 func (s *Store) DeleteWebhookEndpoint(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM webhook_endpoint WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM webhook_endpoint WHERE id = ?`, id)
 	return err
 }
 
 func (s *Store) IncrementWebhookFailures(ctx context.Context, id string, lastErr string) error {
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE webhook_endpoint SET consecutive_failures = consecutive_failures + 1 WHERE id = ?`,
 		id)
 	return err
 }
 
 func (s *Store) ResetWebhookFailures(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE webhook_endpoint SET consecutive_failures = 0 WHERE id = ?`,
 		id)
 	return err
@@ -150,7 +150,7 @@ func (s *Store) ResetWebhookFailures(ctx context.Context, id string) error {
 
 func (s *Store) DisableWebhookEndpoint(ctx context.Context, id, reason string) error {
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE webhook_endpoint SET disabled_at = ?, disabled_reason = ? WHERE id = ?`,
 		now, reason, id)
 	return err
@@ -182,7 +182,7 @@ type EnqueueDeliveryInput struct {
 func (s *Store) EnqueueWebhookDelivery(ctx context.Context, in EnqueueDeliveryInput) (*WebhookDeliveryRow, error) {
 	id := NewID("whd")
 	now := time.Now().UTC().UnixMilli()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO webhook_delivery (id, endpoint_id, event_id, event_type, payload, next_attempt_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, in.EndpointID, in.EventID, in.EventType, string(in.Payload), now, now,
@@ -207,7 +207,7 @@ func (s *Store) ClaimPendingDeliveries(ctx context.Context, limit int) ([]*Webho
 		limit = 16
 	}
 	now := time.Now().UTC().UnixMilli()
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, endpoint_id, event_id, event_type, payload, attempt, next_attempt_at, created_at
 		 FROM webhook_delivery
 		 WHERE delivered_at IS NULL AND next_attempt_at <= ?
@@ -235,14 +235,14 @@ func (s *Store) ClaimPendingDeliveries(ctx context.Context, limit int) ([]*Webho
 
 func (s *Store) MarkDeliveryDelivered(ctx context.Context, id string, status int) error {
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE webhook_delivery SET delivered_at = ?, last_status = ? WHERE id = ?`,
 		now, status, id)
 	return err
 }
 
 func (s *Store) MarkDeliveryFailed(ctx context.Context, id string, status int, errMsg string, nextAttemptAt int64) error {
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE webhook_delivery SET attempt = attempt + 1, last_status = ?, last_error = ?,
 		 next_attempt_at = ? WHERE id = ?`,
 		status, errMsg, nextAttemptAt, id)

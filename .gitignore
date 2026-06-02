@@ -1,6 +1,9 @@
 # Build artifacts
 /bin/
 /dist/
+/jed
+/je
+/je-vault
 *.exe
 *.test
 *.out

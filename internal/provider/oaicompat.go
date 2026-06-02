@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -63,12 +62,12 @@ func (p *OAICompatProvider) Stream(ctx context.Context, req ChatRequest) (<-chan
 
 	resp, err := p.Client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, &APIError{Type: "network", Message: err.Error()}
 	}
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("upstream %d: %s", resp.StatusCode, string(raw))
+		return nil, &APIError{StatusCode: resp.StatusCode, Type: "http_error", Message: string(raw)}
 	}
 
 	ch := make(chan ChatEvent, 16)
@@ -83,16 +82,16 @@ func (p *OAICompatProvider) Stream(ctx context.Context, req ChatRequest) (<-chan
 // ─── 请求构造 ─────────────────────────────────────────────────────────────
 
 type oaiMessage struct {
-	Role       string          `json:"role"`
-	Content    any             `json:"content,omitempty"` // string 或 []part
-	ToolCalls  []oaiToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Role       string        `json:"role"`
+	Content    any           `json:"content,omitempty"` // string 或 []part
+	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Name       string        `json:"name,omitempty"`
 }
 
 type oaiToolCall struct {
 	ID       string          `json:"id,omitempty"`
-	Type     string          `json:"type,omitempty"`     // "function"
+	Type     string          `json:"type,omitempty"` // "function"
 	Function oaiCallFunction `json:"function"`
 }
 
@@ -102,8 +101,8 @@ type oaiCallFunction struct {
 }
 
 type oaiToolDef struct {
-	Type     string          `json:"type"`
-	Function oaiFunctionDef  `json:"function"`
+	Type     string         `json:"type"`
+	Function oaiFunctionDef `json:"function"`
 }
 
 type oaiFunctionDef struct {
@@ -113,11 +112,11 @@ type oaiFunctionDef struct {
 }
 
 type oaiRequest struct {
-	Model     string         `json:"model"`
-	Messages  []oaiMessage   `json:"messages"`
-	Tools     []oaiToolDef   `json:"tools,omitempty"`
-	MaxTokens int            `json:"max_tokens,omitempty"`
-	Stream    bool           `json:"stream"`
+	Model      string          `json:"model"`
+	Messages   []oaiMessage    `json:"messages"`
+	Tools      []oaiToolDef    `json:"tools,omitempty"`
+	MaxTokens  int             `json:"max_tokens,omitempty"`
+	Stream     bool            `json:"stream"`
 	StreamOpts map[string]bool `json:"stream_options,omitempty"`
 }
 
@@ -222,9 +221,9 @@ type oaiStreamResp struct {
 }
 
 type oaiChoice struct {
-	Index        int           `json:"index"`
-	Delta        oaiDelta      `json:"delta"`
-	FinishReason string        `json:"finish_reason"`
+	Index        int      `json:"index"`
+	Delta        oaiDelta `json:"delta"`
+	FinishReason string   `json:"finish_reason"`
 }
 
 type oaiDelta struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -60,7 +61,7 @@ func (s *Store) CreateSession(ctx context.Context, in CreateSessionInput) (*Sess
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO session (id, tenant_id, agent_id, agent_version, agent_snapshot,
 		    environment_id, status, title, metadata, vault_ids, created_at, updated_at, next_seq)
 		 VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, 1)`,
@@ -74,7 +75,7 @@ func (s *Store) CreateSession(ctx context.Context, in CreateSessionInput) (*Sess
 }
 
 func (s *Store) GetSession(ctx context.Context, id string) (*SessionRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, tenant_id, agent_id, agent_version, agent_snapshot,
 		        environment_id, status, title, metadata, vault_ids,
 		        created_at, updated_at, archived_at, terminated_at, next_seq,
@@ -104,14 +105,51 @@ func (s *Store) GetSession(ctx context.Context, id string) (*SessionRow, error) 
 
 func (s *Store) UpdateSessionStatus(ctx context.Context, id, status string) error {
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE session SET status = ?, updated_at = ? WHERE id = ?`,
 		status, now, id)
 	return err
 }
 
+// ListSessionsByStatus 返回某状态下的所有 session id（不分租户，用于启动恢复）。
+func (s *Store) ListSessionsByStatus(ctx context.Context, statuses ...string) ([]string, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(statuses))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(statuses))
+	for i, st := range statuses {
+		args[i] = st
+	}
+	rows, err := s.query(ctx,
+		`SELECT id FROM session WHERE status IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// MarkSessionTerminated 置 session 为 terminated 并记录 terminated_at（ADR-0022）。
+func (s *Store) MarkSessionTerminated(ctx context.Context, id string) error {
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.exec(ctx,
+		`UPDATE session SET status = 'terminated', terminated_at = ?, updated_at = ? WHERE id = ?`,
+		now, now, id)
+	return err
+}
+
 func (s *Store) UpdateSessionUsage(ctx context.Context, id string, input, output, cacheCreate, cacheRead int64) error {
-	_, err := s.DB.ExecContext(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE session SET
 		    usage_input_tokens = usage_input_tokens + ?,
 		    usage_output_tokens = usage_output_tokens + ?,
@@ -131,7 +169,7 @@ func (s *Store) UpdateSession(ctx context.Context, id, title string, metadata js
 	if len(vaultIDsJSON) == 0 {
 		vaultIDsJSON = []byte(`[]`)
 	}
-	res, err := s.DB.ExecContext(ctx,
+	res, err := s.exec(ctx,
 		`UPDATE session SET title = ?, metadata = ?, vault_ids = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`,
 		nullStr(title), string(metadata), string(vaultIDsJSON), now, id)
 	if err != nil {
@@ -145,7 +183,7 @@ func (s *Store) UpdateSession(ctx context.Context, id, title string, metadata js
 
 func (s *Store) ArchiveSession(ctx context.Context, id string) error {
 	now := time.Now().UTC().UnixMilli()
-	res, err := s.DB.ExecContext(ctx, `UPDATE session SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, now, now, id)
+	res, err := s.exec(ctx, `UPDATE session SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, now, now, id)
 	if err != nil {
 		return err
 	}
@@ -159,7 +197,7 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit int) ([
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id FROM session WHERE tenant_id = ? AND archived_at IS NULL
 		 ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
 	if err != nil {
@@ -182,7 +220,7 @@ func (s *Store) ListSessions(ctx context.Context, tenantID string, limit int) ([
 }
 
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM session WHERE id = ?`, id)
+	res, err := s.exec(ctx, `DELETE FROM session WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}

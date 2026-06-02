@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/harrisonwang/jadeenvoy/internal/api"
 	"github.com/harrisonwang/jadeenvoy/internal/store"
@@ -41,7 +42,7 @@ func setupVaultAPIServer(t *testing.T) *httptest.Server {
 }
 
 // TestE2E_VaultCRUD 覆盖 vault + credential CRUD、secret 剥离、同 host 409、
-// mcp_oauth 501（ADR-0015）。
+// mcp_oauth 创建与响应脱敏。
 func TestE2E_VaultCRUD(t *testing.T) {
 	srv := setupVaultAPIServer(t)
 
@@ -52,6 +53,15 @@ func TestE2E_VaultCRUD(t *testing.T) {
 	vid, _ := v["id"].(string)
 	if vid == "" || v["type"] != "vault" {
 		t.Fatalf("bad vault: %v", v)
+	}
+	if code := postJSON(t, srv, "/v1/vaults/"+vid, map[string]any{
+		"display_name": "GitLab Updated",
+		"metadata":     map[string]any{"owner": "platform"},
+	}, &v); code != 200 {
+		t.Fatalf("update vault: %d %v", code, v)
+	}
+	if v["display_name"] != "GitLab Updated" {
+		t.Fatalf("expected updated vault display name, got %v", v["display_name"])
 	}
 
 	// add credential
@@ -70,6 +80,16 @@ func TestE2E_VaultCRUD(t *testing.T) {
 	}
 	if authView["mcp_server_url"] != "https://git.example.com" {
 		t.Fatalf("bad auth view: %v", authView)
+	}
+	credID := c["id"].(string)
+
+	// get credential
+	var gotCred map[string]any
+	if code := getJSON(t, srv, "/v1/vaults/"+vid+"/credentials/"+credID, &gotCred); code != 200 {
+		t.Fatalf("get credential: %d %v", code, gotCred)
+	}
+	if gotCred["display_name"] != "PAT" {
+		t.Fatalf("bad credential: %v", gotCred)
 	}
 
 	// list（仍不含 secret）
@@ -91,14 +111,66 @@ func TestE2E_VaultCRUD(t *testing.T) {
 		t.Fatalf("expected 409 on duplicate host, got %d %v", code, conflict)
 	}
 
-	// mcp_oauth → 501
+	// mcp_oauth → 201，响应仍不泄漏 access/refresh token。
 	var oauth map[string]any
 	code = postJSON(t, srv, "/v1/vaults/"+vid+"/credentials", map[string]any{
 		"display_name": "oauth",
-		"auth":         map[string]any{"type": "mcp_oauth", "mcp_server_url": "https://api.example.com", "token": "t"},
+		"auth": map[string]any{
+			"type":           "mcp_oauth",
+			"mcp_server_url": "https://api.example.com",
+			"access_token":   "access-secret",
+			"expires_at":     time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"refresh": map[string]any{
+				"token_endpoint": "https://auth.example.com/oauth/token",
+				"refresh_token":  "refresh-secret",
+				"client_id":      "client-1",
+				"token_endpoint_auth": map[string]any{
+					"type":          "client_secret_post",
+					"client_secret": "client-secret",
+				},
+			},
+		},
 	}, &oauth)
-	if code != 501 {
-		t.Fatalf("expected 501 for mcp_oauth, got %d %v", code, oauth)
+	if code != 201 {
+		t.Fatalf("expected 201 for mcp_oauth, got %d %v", code, oauth)
+	}
+	oauthView, _ := oauth["auth"].(map[string]any)
+	for _, secretKey := range []string{"access_token", "refresh_token", "client_secret", "token"} {
+		if _, leaked := oauthView[secretKey]; leaked {
+			t.Fatalf("oauth secret leaked in response: %v", oauth)
+		}
+	}
+
+	// update credential（响应仍不含 secret）
+	code = postJSON(t, srv, "/v1/vaults/"+vid+"/credentials/"+credID, map[string]any{
+		"display_name": "PAT updated",
+		"auth":         map[string]any{"type": "static_bearer", "mcp_server_url": "https://git2.example.com", "token": "glpat-zzz"},
+	}, &c)
+	if code != 200 {
+		t.Fatalf("update credential: %d %v", code, c)
+	}
+	authView, _ = c["auth"].(map[string]any)
+	if authView["mcp_server_url"] != "https://git2.example.com" {
+		t.Fatalf("expected updated credential URL, got %v", authView)
+	}
+	if _, leaked := authView["token"]; leaked {
+		t.Fatalf("token leaked after update: %v", c)
+	}
+
+	// archive credential 后，同 host 可以重新创建新凭据
+	code = postJSON(t, srv, "/v1/vaults/"+vid+"/credentials/"+credID+"/archive", map[string]any{}, &c)
+	if code != 200 {
+		t.Fatalf("archive credential: %d %v", code, c)
+	}
+	if c["archived_at"] == nil {
+		t.Fatalf("expected archived_at after credential archive, got %v", c)
+	}
+	code = postJSON(t, srv, "/v1/vaults/"+vid+"/credentials", map[string]any{
+		"display_name": "PAT replacement",
+		"auth":         map[string]any{"type": "static_bearer", "mcp_server_url": "https://git2.example.com/api", "token": "glpat-new"},
+	}, &c)
+	if code != 201 {
+		t.Fatalf("add replacement credential after archive: %d %v", code, c)
 	}
 
 	// delete vault

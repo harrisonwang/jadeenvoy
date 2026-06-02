@@ -23,10 +23,16 @@ type AddSessionResourceInput struct {
 	Payload   json.RawMessage
 }
 
+type UpdateSessionResourceInput struct {
+	ID      string
+	Type    string
+	Payload json.RawMessage
+}
+
 func (s *Store) AddSessionResource(ctx context.Context, in AddSessionResourceInput) (*SessionResourceRow, error) {
 	id := NewID("sres")
 	now := time.Now().UTC().UnixMilli()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO session_resource (id, session_id, type, payload, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		id, in.SessionID, in.Type, string(in.Payload), now,
@@ -43,7 +49,7 @@ func (s *Store) AddSessionResource(ctx context.Context, in AddSessionResourceInp
 }
 
 func (s *Store) ListSessionResources(ctx context.Context, sessionID string) ([]*SessionResourceRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, session_id, type, payload, created_at FROM session_resource
 		 WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
 	if err != nil {
@@ -66,12 +72,23 @@ func (s *Store) ListSessionResources(ctx context.Context, sessionID string) ([]*
 }
 
 func (s *Store) DeleteSessionResource(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM session_resource WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM session_resource WHERE id = ?`, id)
 	return err
 }
 
+func (s *Store) UpdateSessionResource(ctx context.Context, in UpdateSessionResourceInput) (*SessionResourceRow, error) {
+	_, err := s.exec(ctx,
+		`UPDATE session_resource SET type = ?, payload = ? WHERE id = ?`,
+		in.Type, string(in.Payload), in.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetSessionResource(ctx, in.ID)
+}
+
 func (s *Store) GetSessionResource(ctx context.Context, id string) (*SessionResourceRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, session_id, type, payload, created_at FROM session_resource WHERE id = ?`, id)
 	r := &SessionResourceRow{}
 	var payload string

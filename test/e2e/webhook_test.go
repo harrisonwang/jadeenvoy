@@ -62,10 +62,10 @@ func (r *recorder) get() []receivedWebhook {
 }
 
 // TestE2E_M2_WebhookDelivery 端到端验证：
-//   1. 注册一个 webhook endpoint 订阅 session.status_idle
-//   2. 跑一个 session
-//   3. webhook 接收器应该收到 session.status_idle 投递
-//   4. HMAC 签名能用 endpoint secret 验证
+//  1. 注册一个 webhook endpoint 订阅 session.status_idle
+//  2. 跑一个 session
+//  3. webhook 接收器应该收到 session.status_idle 投递
+//  4. HMAC 签名能用 endpoint secret 验证
 func TestE2E_M2_WebhookDelivery(t *testing.T) {
 	srv, mock := setupHarness(t)
 	recSrv, rec := newRecorder()

@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS vault_credential (
     vault_id            TEXT NOT NULL REFERENCES vault(id) ON DELETE CASCADE,
     tenant_id           TEXT NOT NULL DEFAULT 'tnt-default',
     display_name        TEXT NOT NULL,
-    auth_type           TEXT NOT NULL CHECK (auth_type IN ('static_bearer')),
+    auth_type           TEXT NOT NULL CHECK (auth_type IN ('static_bearer','mcp_oauth')),
     mcp_server_url      TEXT NOT NULL,
     mcp_server_host     TEXT NOT NULL,
     cipher              BLOB NOT NULL,

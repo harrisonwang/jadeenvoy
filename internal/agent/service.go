@@ -14,6 +14,8 @@ type Service struct {
 	st *store.Store
 }
 
+const guardrailsMetadataKey = "_jadeenvoy_guardrails"
+
 func New(st *store.Store) *Service {
 	return &Service{st: st}
 }
@@ -26,9 +28,13 @@ func (s *Service) Create(ctx context.Context, tenantID string, req apitypes.Crea
 	if len(skills) == 0 || string(skills) == "null" {
 		skills = []byte(`[]`)
 	}
-	meta, _ := json.Marshal(req.Metadata)
-	if len(req.Metadata) == 0 {
-		meta = []byte(`{}`)
+	mcpServers, _ := json.Marshal(req.MCPServers)
+	if len(mcpServers) == 0 || string(mcpServers) == "null" {
+		mcpServers = []byte(`[]`)
+	}
+	meta, err := encodeAgentMetadata(req.Metadata, req.Guardrails)
+	if err != nil {
+		return nil, err
 	}
 
 	row, err := s.st.CreateAgent(ctx, store.CreateAgentInput{
@@ -38,7 +44,9 @@ func (s *Service) Create(ctx context.Context, tenantID string, req apitypes.Crea
 		System:      req.System,
 		Description: req.Description,
 		Tools:       tools,
+		MCPServers:  mcpServers,
 		Skills:      skills,
+		Multiagent:  req.Multiagent,
 		Metadata:    meta,
 	})
 	if err != nil {
@@ -74,9 +82,13 @@ func (s *Service) Update(ctx context.Context, id string, req apitypes.UpdateAgen
 	if len(skills) == 0 || string(skills) == "null" {
 		skills = []byte(`[]`)
 	}
-	meta, _ := json.Marshal(req.Metadata)
-	if len(req.Metadata) == 0 {
-		meta = []byte(`{}`)
+	mcpServers, _ := json.Marshal(req.MCPServers)
+	if len(mcpServers) == 0 || string(mcpServers) == "null" {
+		mcpServers = []byte(`[]`)
+	}
+	meta, err := encodeAgentMetadata(req.Metadata, req.Guardrails)
+	if err != nil {
+		return nil, err
 	}
 	row, err := s.st.UpdateAgent(ctx, id, store.UpdateAgentInput{
 		Name:        req.Name,
@@ -84,7 +96,9 @@ func (s *Service) Update(ctx context.Context, id string, req apitypes.UpdateAgen
 		System:      req.System,
 		Description: req.Description,
 		Tools:       tools,
+		MCPServers:  mcpServers,
 		Skills:      skills,
+		Multiagent:  req.Multiagent,
 		Metadata:    meta,
 		Version:     req.Version,
 	})
@@ -140,8 +154,12 @@ func rowToAPI(r *store.AgentRow) *apitypes.Agent {
 	_ = json.Unmarshal(r.Model, &a.Model)
 	_ = json.Unmarshal(r.Tools, &a.Tools)
 	_ = json.Unmarshal(r.Metadata, &a.Metadata)
-	for i := range a.Tools {
-		_ = i
+	if raw, ok := a.Metadata[guardrailsMetadataKey]; ok {
+		var guardrails apitypes.AgentGuardrails
+		if err := json.Unmarshal([]byte(raw), &guardrails); err == nil {
+			a.Guardrails = &guardrails
+		}
+		delete(a.Metadata, guardrailsMetadataKey)
 	}
 	// Skills / MCPServers 保持 raw
 	if len(r.Skills) > 0 && string(r.Skills) != "null" {
@@ -156,5 +174,29 @@ func rowToAPI(r *store.AgentRow) *apitypes.Agent {
 			a.MCPServers = arr
 		}
 	}
+	if len(r.Multiagent) > 0 && string(r.Multiagent) != "null" {
+		a.Multiagent = r.Multiagent
+	}
 	return a
+}
+
+func encodeAgentMetadata(meta map[string]string, guardrails *apitypes.AgentGuardrails) ([]byte, error) {
+	out := make(map[string]string, len(meta)+1)
+	for k, v := range meta {
+		if k == guardrailsMetadataKey {
+			continue
+		}
+		out[k] = v
+	}
+	if guardrails != nil {
+		raw, err := json.Marshal(guardrails)
+		if err != nil {
+			return nil, err
+		}
+		out[guardrailsMetadataKey] = string(raw)
+	}
+	if len(out) == 0 {
+		return []byte(`{}`), nil
+	}
+	return json.Marshal(out)
 }

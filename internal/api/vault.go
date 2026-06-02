@@ -19,15 +19,16 @@ func MountVaultRoutes(r chi.Router, svc *vault.Service) {
 		r.Post("/", createVault(svc))
 		r.Get("/", listVaults(svc))
 		r.Get("/{id}", getVault(svc))
+		r.Post("/{id}", updateVault(svc))
 		r.Delete("/{id}", deleteVault(svc))
 		r.Post("/{id}/archive", archiveVault(svc))
 		r.Post("/{id}/credentials", addCredential(svc))
 		r.Get("/{id}/credentials", listCredentials(svc))
+		r.Get("/{id}/credentials/{credId}", getCredential(svc))
+		r.Post("/{id}/credentials/{credId}", updateCredential(svc))
 		r.Delete("/{id}/credentials/{credId}", deleteCredential(svc))
-		// mcp_oauth 凭据类型 V1 不支持，明确 501（ADR-0015），不静默 stub。
-		r.Post("/{id}/credentials/{credId}/mcp_oauth_validate", func(w http.ResponseWriter, r *http.Request) {
-			writeErr(w, 501, "not_implemented_error", "mcp_oauth credentials are not supported in V1 (static_bearer only)")
-		})
+		r.Post("/{id}/credentials/{credId}/archive", archiveCredential(svc))
+		r.Post("/{id}/credentials/{credId}/mcp_oauth_validate", validateOAuthCredential(svc))
 	})
 }
 
@@ -91,6 +92,26 @@ func archiveVault(svc *vault.Service) http.HandlerFunc {
 	}
 }
 
+func updateVault(svc *vault.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req apitypes.CreateVaultRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, "invalid_request_error", "invalid json: "+err.Error())
+			return
+		}
+		out, err := svc.UpdateVault(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), req)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeErr(w, 404, "not_found_error", err.Error())
+				return
+			}
+			writeErr(w, 400, "invalid_request_error", err.Error())
+			return
+		}
+		writeJSON(w, 200, out)
+	}
+}
+
 func deleteVault(svc *vault.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -114,7 +135,7 @@ func addCredential(svc *vault.Service) http.HandlerFunc {
 		if err != nil {
 			switch {
 			case errors.Is(err, vault.ErrUnsupportedAuthType):
-				writeErr(w, 501, "not_implemented_error", "only static_bearer is supported in V1 (mcp_oauth is M3)")
+				writeErr(w, 400, "invalid_request_error", "unsupported credential auth type")
 			case errors.Is(err, store.ErrConflict):
 				writeErr(w, 409, "conflict_error", "a credential for this host already exists in the vault; archive it first")
 			case errors.Is(err, store.ErrNotFound):
@@ -143,6 +164,58 @@ func listCredentials(svc *vault.Service) http.HandlerFunc {
 	}
 }
 
+func getCredential(svc *vault.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out, err := svc.GetCredential(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), chi.URLParam(r, "credId"))
+		if err != nil {
+			writeErr(w, 404, "not_found_error", err.Error())
+			return
+		}
+		writeJSON(w, 200, out)
+	}
+}
+
+func updateCredential(svc *vault.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req apitypes.CreateCredentialRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, "invalid_request_error", "invalid json: "+err.Error())
+			return
+		}
+		out, err := svc.UpdateCredential(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), chi.URLParam(r, "credId"), req)
+		if err != nil {
+			switch {
+			case errors.Is(err, vault.ErrUnsupportedAuthType):
+				writeErr(w, 400, "invalid_request_error", "unsupported credential auth type")
+			case errors.Is(err, store.ErrConflict):
+				writeErr(w, 409, "conflict_error", "a credential for this host already exists in the vault; archive it first")
+			case errors.Is(err, store.ErrNotFound):
+				writeErr(w, 404, "not_found_error", "credential not found")
+			default:
+				writeErr(w, 400, "invalid_request_error", err.Error())
+			}
+			return
+		}
+		writeJSON(w, 200, out)
+	}
+}
+
+func archiveCredential(svc *vault.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		credID := chi.URLParam(r, "credId")
+		if err := svc.ArchiveCredential(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), credID); err != nil {
+			writeErr(w, 404, "not_found_error", err.Error())
+			return
+		}
+		out, err := svc.GetCredential(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), credID)
+		if err != nil {
+			writeErr(w, 404, "not_found_error", err.Error())
+			return
+		}
+		writeJSON(w, 200, out)
+	}
+}
+
 func deleteCredential(svc *vault.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		credID := chi.URLParam(r, "credId")
@@ -151,5 +224,19 @@ func deleteCredential(svc *vault.Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 200, map[string]string{"id": credID, "type": "credential_deleted"})
+	}
+}
+
+func validateOAuthCredential(svc *vault.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := svc.ValidateOAuthCredential(r.Context(), tenantFromCtx(r), chi.URLParam(r, "id"), chi.URLParam(r, "credId")); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeErr(w, 404, "not_found_error", "credential not found")
+				return
+			}
+			writeErr(w, 400, "invalid_request_error", err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok"})
 	}
 }

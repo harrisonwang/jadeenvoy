@@ -36,7 +36,7 @@ func (s *Store) CreateFile(ctx context.Context, in CreateFileInput) (*FileRow, e
 	id := NewID("fil")
 	now := time.Now().UTC().UnixMilli()
 	size := int64(len(in.Blob))
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO file (id, tenant_id, filename, content_type, blob, size, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.TenantID, in.Filename, in.ContentType, in.Blob, size, now, now,
@@ -47,7 +47,7 @@ func (s *Store) CreateFile(ctx context.Context, in CreateFileInput) (*FileRow, e
 }
 
 func (s *Store) GetFile(ctx context.Context, id string) (*FileRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, tenant_id, filename, content_type, blob, size, created_at, updated_at
 		 FROM file WHERE id = ?`, id)
 	r := &FileRow{}
@@ -65,7 +65,7 @@ func (s *Store) GetFile(ctx context.Context, id string) (*FileRow, error) {
 }
 
 func (s *Store) ListFiles(ctx context.Context, tenantID string) ([]*FileRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, tenant_id, filename, content_type, blob, size, created_at, updated_at
 		 FROM file WHERE tenant_id = ? ORDER BY created_at DESC`, tenantID)
 	if err != nil {
@@ -88,6 +88,6 @@ func (s *Store) ListFiles(ctx context.Context, tenantID string) ([]*FileRow, err
 }
 
 func (s *Store) DeleteFile(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM file WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM file WHERE id = ?`, id)
 	return err
 }

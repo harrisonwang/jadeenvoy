@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -27,6 +26,11 @@ type AnthropicProvider struct {
 	Headers map[string]string // 额外 header
 	Client  *http.Client
 	NameStr string // "anthropic" / "anthropic_compat"
+
+	// EnableCaching 控制是否给 system + tools 前缀打 cache_control: ephemeral。
+	// 默认开（Anthropic Messages API 标准能力，anthropic_compat 网关同样声明兼容该形状）。
+	// 若某 compat 网关对未知字段严格 400，可置 false 退回纯请求。
+	EnableCaching bool
 }
 
 func NewAnthropic(baseURL, apiKey, name string) *AnthropicProvider {
@@ -37,11 +41,12 @@ func NewAnthropic(baseURL, apiKey, name string) *AnthropicProvider {
 		name = "anthropic"
 	}
 	return &AnthropicProvider{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		APIKey:  apiKey,
-		Version: "2023-06-01",
-		Client:  &http.Client{Timeout: 600 * time.Second},
-		NameStr: name,
+		BaseURL:       strings.TrimRight(baseURL, "/"),
+		APIKey:        apiKey,
+		Version:       "2023-06-01",
+		Client:        &http.Client{Timeout: 600 * time.Second},
+		NameStr:       name,
+		EnableCaching: true,
 	}
 }
 
@@ -53,7 +58,7 @@ func (p *AnthropicProvider) Name() string {
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error) {
-	body := buildAnthropicRequest(req)
+	body := buildAnthropicRequest(req, p.EnableCaching)
 	bodyBytes, _ := json.Marshal(body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -73,12 +78,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req ChatRequest) (<-chan
 
 	resp, err := p.Client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, &APIError{Type: "network", Message: err.Error()}
 	}
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("upstream %d: %s", resp.StatusCode, string(raw))
+		return nil, &APIError{StatusCode: resp.StatusCode, Type: "http_error", Message: string(raw)}
 	}
 
 	ch := make(chan ChatEvent, 16)
@@ -95,7 +100,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req ChatRequest) (<-chan
 type antRequest struct {
 	Model       string       `json:"model"`
 	MaxTokens   int          `json:"max_tokens"`
-	System      string       `json:"system,omitempty"`
+	System      any          `json:"system,omitempty"` // string 或 []block（带 cache_control）
 	Messages    []antMessage `json:"messages"`
 	Tools       []antTool    `json:"tools,omitempty"`
 	Temperature *float64     `json:"temperature,omitempty"`
@@ -108,12 +113,15 @@ type antMessage struct {
 }
 
 type antTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl map[string]any  `json:"cache_control,omitempty"`
 }
 
-func buildAnthropicRequest(req ChatRequest) antRequest {
+// buildAnthropicRequest 构造请求体。enableCaching 时给稳定前缀（system + 最后一个 tool）
+// 打 cache_control: ephemeral —— 缓存 system + 全部 tools 定义，省掉每轮重复计费（见 ADR-0021）。
+func buildAnthropicRequest(req ChatRequest, enableCaching bool) antRequest {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -121,8 +129,18 @@ func buildAnthropicRequest(req ChatRequest) antRequest {
 	out := antRequest{
 		Model:     req.Model,
 		MaxTokens: maxTokens,
-		System:    req.System,
 		Stream:    true,
+	}
+	if req.System != "" {
+		if enableCaching {
+			out.System = []map[string]any{{
+				"type":          "text",
+				"text":          req.System,
+				"cache_control": map[string]any{"type": "ephemeral"},
+			}}
+		} else {
+			out.System = req.System
+		}
 	}
 	if req.Temperature > 0 {
 		t := req.Temperature
@@ -149,6 +167,10 @@ func buildAnthropicRequest(req ChatRequest) antRequest {
 			Description: t.Description,
 			InputSchema: schema,
 		})
+	}
+	// 只给最后一个 tool 打 cache_control：缓存断点覆盖其之前的整个 tools 前缀。
+	if enableCaching && len(out.Tools) > 0 {
+		out.Tools[len(out.Tools)-1].CacheControl = map[string]any{"type": "ephemeral"}
 	}
 	return out
 }

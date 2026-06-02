@@ -21,12 +21,25 @@ type Config struct {
 	AuthMode string // required / optional / bypass
 
 	// LLM provider
-	LLMProvider string // anthropic / anthropic_compat / openai_compat / mock
-	LLMBaseURL  string
-	LLMAPIKey   string
+	LLMProvider       string // anthropic / anthropic_compat / openai_compat / mock
+	LLMBaseURL        string
+	LLMAPIKey         string
+	DefaultAgentModel string
 
 	// Sandbox
-	SandboxKind string // subprocess / docker
+	SandboxKind        string // subprocess / docker
+	SandboxKeepWorkdir bool   // true 则 session 删除时保留 workdir（调试）。默认 false
+
+	// Harness — context compaction（ADR-0021）
+	CompactThresholdTokens int // 历史超此 token 触发摘要压缩；<=0 关闭。默认 150000
+	KeepRecentTurns        int // 压缩时逐字保留最近多少个 turn。默认 3
+
+	// Harness — 错误恢复（ADR-0022）
+	LLMMaxRetries     int // 瞬时错误重试次数。默认 2
+	LLMRetryBackoffMS int // 重试退避基数（毫秒），实际退避 = base*attempt。默认 500
+
+	// Webhook
+	WebhookAllowPrivate bool // 放行私网/环回 webhook 目标（内网部署）。默认 false 防 SSRF
 
 	// Vault MITM 代理（ADR-0006/0019）
 	VaultProxyAddr string // je-vault 监听地址，默认 :14322
@@ -45,11 +58,21 @@ func Load() (*Config, error) {
 		DatabaseURL: os.Getenv("JE_DATABASE_URL"),
 		AuthMode:    envOr("JE_AUTH_MODE", "bypass"),
 
-		LLMProvider: envOr("JE_LLM_PROVIDER", "mock"),
-		LLMBaseURL:  os.Getenv("JE_LLM_BASE_URL"),
-		LLMAPIKey:   os.Getenv("JE_LLM_API_KEY"),
+		LLMProvider:       envOr("JE_LLM_PROVIDER", "mock"),
+		LLMBaseURL:        os.Getenv("JE_LLM_BASE_URL"),
+		LLMAPIKey:         os.Getenv("JE_LLM_API_KEY"),
+		DefaultAgentModel: envOr("JE_DEFAULT_AGENT_MODEL", "tw-agent-max"),
 
-		SandboxKind: envOr("JE_SANDBOX_KIND", "subprocess"),
+		SandboxKind:        envOr("JE_SANDBOX_KIND", "subprocess"),
+		SandboxKeepWorkdir: envOr("JE_SANDBOX_KEEP_WORKDIR", "") == "1",
+
+		CompactThresholdTokens: envInt("JE_COMPACT_THRESHOLD_TOKENS", 150000),
+		KeepRecentTurns:        envInt("JE_KEEP_RECENT_TURNS", 3),
+
+		LLMMaxRetries:     envInt("JE_LLM_MAX_RETRIES", 2),
+		LLMRetryBackoffMS: envInt("JE_LLM_RETRY_BACKOFF_MS", 500),
+
+		WebhookAllowPrivate: envOr("JE_WEBHOOK_ALLOW_PRIVATE", "") == "1",
 
 		VaultProxyAddr: envOr("JE_VAULT_PROXY_ADDR", ":14322"),
 		VaultProxyURL:  os.Getenv("JE_VAULT_PROXY_URL"),
@@ -111,6 +134,3 @@ func envInt(k string, def int) int {
 	}
 	return def
 }
-
-// 防 "declared but not used"
-var _ = envInt

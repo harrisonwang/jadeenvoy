@@ -27,11 +27,17 @@ import (
 	"github.com/harrisonwang/jadeenvoy/internal/session"
 	"github.com/harrisonwang/jadeenvoy/internal/store"
 	"github.com/harrisonwang/jadeenvoy/internal/tool"
+	"github.com/harrisonwang/jadeenvoy/internal/vault"
 	"github.com/harrisonwang/jadeenvoy/internal/webhook"
 )
 
 // setupHarness 起一个真实但内存隔离的 jed 栈，返回 httptest server + mock provider。
 func setupHarness(t *testing.T) (*httptest.Server, *provider.MockProvider) {
+	return setupHarnessWith(t, nil)
+}
+
+// setupHarnessWith 同 setupHarness，但允许在装配后调 configure 调整 harness（如压缩阈值、MaxSteps）。
+func setupHarnessWith(t *testing.T, configure func(*harness.Harness)) (*httptest.Server, *provider.MockProvider) {
 	t.Helper()
 	tmp := t.TempDir()
 
@@ -60,8 +66,23 @@ func setupHarness(t *testing.T) (*httptest.Server, *provider.MockProvider) {
 	sessionSvc := session.New(st)
 	memorySvc := memory.New(st)
 	webhookSvc := webhook.New(st)
+	webhookSvc.AllowPrivate = true // 测试用 httptest(127.0.0.1) 目标
+	vaultSvc, err := vault.New(st, "test-root-secret-0123456789abcdef")
+	if err != nil {
+		t.Fatalf("vault.New: %v", err)
+	}
 	hrns := harness.New(st, broker, mockProv, sbProvider, registry)
 	hrns.Memory = memorySvc
+	hrns.VaultResolveToken = func(ctx context.Context, tenantID string, vaultIDs []string, host string) string {
+		rc, err := vaultSvc.Resolve(ctx, tenantID, vaultIDs, host)
+		if err != nil || rc == nil {
+			return ""
+		}
+		return rc.Token
+	}
+	if configure != nil {
+		configure(hrns)
+	}
 
 	// 接通 broker → webhook
 	broker.RegisterHook(func(ev event.Event) {
@@ -76,14 +97,17 @@ func setupHarness(t *testing.T) (*httptest.Server, *provider.MockProvider) {
 	go webhookSvc.Run(dispatchCtx)
 
 	deps := &api.Deps{
-		Store:    st,
-		Broker:   broker,
-		Agent:    agentSvc,
-		Session:  sessionSvc,
-		Memory:   memorySvc,
-		Webhook:  webhookSvc,
-		Harness:  hrns,
-		AuthMode: "bypass",
+		Store:             st,
+		Broker:            broker,
+		Agent:             agentSvc,
+		Session:           sessionSvc,
+		Memory:            memorySvc,
+		Webhook:           webhookSvc,
+		Vault:             vaultSvc,
+		Harness:           hrns,
+		AuthMode:          "bypass",
+		LLMProvider:       "mock",
+		DefaultAgentModel: "mock-model",
 	}
 	srv := httptest.NewServer(api.NewRouter(deps))
 	t.Cleanup(srv.Close)

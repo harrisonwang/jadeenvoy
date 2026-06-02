@@ -5,7 +5,41 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
+
+// APIError 是 provider 调用的结构化错误，集中承载重试分类（见 ADR-0022）。
+// StatusCode==0 表示无 HTTP 响应（网络/超时/流内错误），靠 Type 判断。
+type APIError struct {
+	StatusCode int
+	Type       string
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("provider %d (%s): %s", e.StatusCode, e.Type, e.Message)
+	}
+	return fmt.Sprintf("provider error (%s): %s", e.Type, e.Message)
+}
+
+// Retryable 报告该错误是否值得重试（瞬时）。分类规则集中此处。
+func (e *APIError) Retryable() bool {
+	switch {
+	case e.StatusCode == 429:
+		return true // rate limit
+	case e.StatusCode >= 500:
+		return true // 网关 5xx
+	case e.StatusCode >= 400:
+		return false // 其余 4xx 永久（鉴权/参数）
+	}
+	// 无 HTTP 状态：按错误类型判断
+	switch e.Type {
+	case "network", "timeout", "overloaded_error", "api_error", "rate_limit_error":
+		return true
+	}
+	return false
+}
 
 // ─── 协议类型 ─────────────────────────────────────────────────────────────
 
@@ -21,19 +55,19 @@ const (
 
 // Message 是 chat history 中的一条。
 type Message struct {
-	Role    Role            `json:"role"`
-	Content []ContentBlock  `json:"content"`
+	Role    Role           `json:"role"`
+	Content []ContentBlock `json:"content"`
 }
 
 // ContentBlock 是 message 的内容块（text / tool_use / tool_result）。
 type ContentBlock struct {
-	Type        string          `json:"type"`         // text / tool_use / tool_result
-	Text        string          `json:"text,omitempty"`
-	ToolUseID   string          `json:"tool_use_id,omitempty"`   // for tool_result
-	ToolName    string          `json:"name,omitempty"`           // for tool_use
-	ToolInput   json.RawMessage `json:"input,omitempty"`          // for tool_use
-	ToolResult  string          `json:"content,omitempty"`        // for tool_result (text)
-	IsError     bool            `json:"is_error,omitempty"`       // for tool_result
+	Type       string          `json:"type"` // text / tool_use / tool_result
+	Text       string          `json:"text,omitempty"`
+	ToolUseID  string          `json:"tool_use_id,omitempty"` // for tool_result
+	ToolName   string          `json:"name,omitempty"`        // for tool_use
+	ToolInput  json.RawMessage `json:"input,omitempty"`       // for tool_use
+	ToolResult string          `json:"content,omitempty"`     // for tool_result (text)
+	IsError    bool            `json:"is_error,omitempty"`    // for tool_result
 }
 
 // ToolDef 是给 LLM 看的工具定义。
@@ -84,11 +118,17 @@ type StopReason struct {
 func (StopReason) chatEvent() {}
 
 type ErrorEvent struct {
-	Type    string
-	Message string
+	Type       string
+	Message    string
+	StatusCode int // 可选；流内错误通常无 HTTP 状态
 }
 
 func (ErrorEvent) chatEvent() {}
+
+// APIError 把 ErrorEvent 转成结构化错误，供 harness 做重试分类。
+func (e ErrorEvent) APIError() *APIError {
+	return &APIError{StatusCode: e.StatusCode, Type: e.Type, Message: e.Message}
+}
 
 type Usage struct {
 	InputTokens              int64 `json:"input_tokens"`

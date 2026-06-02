@@ -16,11 +16,24 @@ import (
 //
 // 警告：无任何隔离，仅适用于公司内部信任环境（详见 ADR-0010）。
 type LocalSubprocessProvider struct {
-	RootDir string // 比如 data/sandboxes/
+	RootDir     string // 比如 data/sandboxes/
+	KeepWorkdir bool   // true 则 Destroy 不删 workdir（调试）
 }
 
 func NewLocalSubprocessProvider(rootDir string) *LocalSubprocessProvider {
 	return &LocalSubprocessProvider{RootDir: rootDir}
+}
+
+// Destroy 删除 session 的 workdir。幂等；KeepWorkdir 时保留。
+// workdir 在 turn 之间持久（stateful 文件系统），故只在 session 删除时回收。
+func (p *LocalSubprocessProvider) Destroy(ctx context.Context, sessionID string) error {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || sessionID == "." || sessionID == ".." {
+		return fmt.Errorf("invalid session id for destroy: %q", sessionID)
+	}
+	if p.KeepWorkdir {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(p.RootDir, sessionID))
 }
 
 func (p *LocalSubprocessProvider) Provision(ctx context.Context, sessionID string) (Sandbox, error) {

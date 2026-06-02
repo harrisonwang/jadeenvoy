@@ -5,18 +5,21 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
 // Store 是统一持久化接口。
 type Store struct {
-	DB     *sql.DB
-	Driver string // "sqlite" / "postgres"
+	DB      *sql.DB
+	Driver  string // "sqlite" / "postgres"
+	dialect dialect
 }
 
 // Open 根据 DatabaseURL 打开 DB 并自动跑迁移。
@@ -24,6 +27,8 @@ type Store struct {
 // 支持的 URL:
 //   - sqlite:///abs/path/to/file.db
 //   - sqlite://./relative/file.db
+//   - postgres://user:pass@host:5432/db?sslmode=disable
+//   - postgresql://user:pass@host:5432/db?sslmode=disable
 func Open(ctx context.Context, dbURL string) (*Store, error) {
 	if strings.HasPrefix(dbURL, "sqlite://") {
 		path := strings.TrimPrefix(dbURL, "sqlite://")
@@ -41,7 +46,33 @@ func Open(ctx context.Context, dbURL string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("ping sqlite: %w", err)
 		}
-		s := &Store{DB: db, Driver: "sqlite"}
+		d, err := dialectForDriver("sqlite")
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		s := &Store{DB: db, Driver: "sqlite", dialect: d}
+		if err := s.Migrate(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		return s, nil
+	}
+	if strings.HasPrefix(dbURL, "postgres://") || strings.HasPrefix(dbURL, "postgresql://") {
+		db, err := sql.Open("pgx", dbURL)
+		if err != nil {
+			return nil, fmt.Errorf("open postgres: %w", err)
+		}
+		if err := db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("ping postgres: %w", err)
+		}
+		d, err := dialectForDriver("postgres")
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		s := &Store{DB: db, Driver: "postgres", dialect: d}
 		if err := s.Migrate(ctx); err != nil {
 			db.Close()
 			return nil, err
@@ -57,17 +88,50 @@ func (s *Store) Close() error {
 
 // Migrate 跑内置 schema。V1 极简：单一 schema，幂等。
 func (s *Store) Migrate(ctx context.Context) error {
-	var schema string
-	switch s.Driver {
-	case "sqlite":
-		schema = sqliteSchema
-	default:
-		return fmt.Errorf("no schema for driver %s", s.Driver)
+	d, err := s.ensureDialect()
+	if err != nil {
+		return err
 	}
-	if _, err := s.DB.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("apply schema: %w", err)
+	for _, stmt := range schemaStatements(d.Schema(sqliteSchema)) {
+		if _, err := s.exec(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema statement: %w", err)
+		}
 	}
 	return nil
+}
+
+func schemaStatements(schema string) []string {
+	var out []string
+	start := 0
+	inSingle := false
+	for i := 0; i < len(schema); i++ {
+		ch := schema[i]
+		if ch == '\'' {
+			if inSingle && i+1 < len(schema) && schema[i+1] == '\'' {
+				i++
+				continue
+			}
+			inSingle = !inSingle
+			continue
+		}
+		if ch == ';' && !inSingle {
+			if stmt := strings.TrimSpace(schema[start:i]); stmt != "" {
+				out = append(out, stmt)
+			}
+			start = i + 1
+		}
+	}
+	if stmt := strings.TrimSpace(schema[start:]); stmt != "" {
+		out = append(out, stmt)
+	}
+	return out
+}
+
+func nullRaw(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return string(raw)
 }
 
 const sqliteSchema = `
@@ -97,6 +161,17 @@ CREATE TABLE IF NOT EXISTS agent_version (
     created_at      INTEGER NOT NULL,
     PRIMARY KEY (agent_id, version)
 );
+
+CREATE TABLE IF NOT EXISTS environment (
+    id              TEXT PRIMARY KEY,
+    tenant_id       TEXT NOT NULL DEFAULT 'tnt-default',
+    name            TEXT NOT NULL,
+    config          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(config)),
+    archived_at     INTEGER,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS environment_tenant ON environment(tenant_id);
 
 CREATE TABLE IF NOT EXISTS session (
     id                  TEXT PRIMARY KEY,
@@ -151,7 +226,7 @@ CREATE TABLE IF NOT EXISTS vault_credential (
     vault_id            TEXT NOT NULL REFERENCES vault(id) ON DELETE CASCADE,
     tenant_id           TEXT NOT NULL DEFAULT 'tnt-default',
     display_name        TEXT NOT NULL,
-    auth_type           TEXT NOT NULL CHECK (auth_type IN ('static_bearer')),
+    auth_type           TEXT NOT NULL CHECK (auth_type IN ('static_bearer','mcp_oauth')),
     mcp_server_url      TEXT NOT NULL,
     mcp_server_host     TEXT NOT NULL,
     cipher              BLOB NOT NULL,
@@ -194,6 +269,22 @@ CREATE TABLE IF NOT EXISTS memory (
 );
 
 CREATE INDEX IF NOT EXISTS memory_store_id_path ON memory(memory_store_id, path);
+
+CREATE TABLE IF NOT EXISTS memory_version (
+    id              TEXT PRIMARY KEY,
+    memory_store_id TEXT NOT NULL REFERENCES memory_store(id) ON DELETE CASCADE,
+    memory_id       TEXT NOT NULL,
+    tenant_id       TEXT NOT NULL DEFAULT 'tnt-default',
+    operation       TEXT NOT NULL CHECK (operation IN ('created','modified','deleted')),
+    path            TEXT,
+    content         TEXT,
+    content_sha256  TEXT,
+    content_size    INTEGER,
+    created_at      INTEGER NOT NULL,
+    redacted_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS memory_version_store_created ON memory_version(memory_store_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS memory_version_memory_created ON memory_version(memory_id, created_at DESC);
 
 -- M2: Session resources（挂载到 sandbox 的资源，含 memory_store 引用） -----
 

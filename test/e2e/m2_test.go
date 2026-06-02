@@ -14,8 +14,8 @@ import (
 )
 
 // TestE2E_M2_CustomTool 测试自定义工具的两阶段闭环：
-//   1. agent 调 custom tool → session 进 requires_action
-//   2. client 发 custom_tool_result → session 恢复 → 最终回复
+//  1. agent 调 custom tool → session 进 requires_action
+//  2. client 发 custom_tool_result → session 恢复 → 最终回复
 func TestE2E_M2_CustomTool(t *testing.T) {
 	srv, mock := setupHarness(t)
 
@@ -324,9 +324,10 @@ func TestE2E_M2_SkillsZipUpload(t *testing.T) {
 // TestE2E_M2_FileTools 测试 write + read 工具的两轮 agent 闭环。
 //
 // 模拟：用户问"创建并读 hello.txt"
-//   轮 1: agent 用 write 工具创建 /workspace/hello.txt
-//   轮 2: agent 收到 write 成功，用 read 工具读
-//   轮 3: agent 收到内容，回复用户
+//
+//	轮 1: agent 用 write 工具创建 /workspace/hello.txt
+//	轮 2: agent 收到 write 成功，用 read 工具读
+//	轮 3: agent 收到内容，回复用户
 func TestE2E_M2_FileTools(t *testing.T) {
 	srv, mock := setupHarness(t)
 
@@ -438,6 +439,25 @@ func TestE2E_M2_MemoryStore(t *testing.T) {
 	}
 	if retrieved["content"] != "Use spaces." {
 		t.Fatalf("expected content=Use spaces., got %v", retrieved["content"])
+	}
+
+	// 更新并归档 store
+	code = postJSON(t, srv, "/v1/memory_stores/"+storeID, map[string]any{
+		"name":        "user-prefs-updated",
+		"description": "Updated preferences",
+	}, &store)
+	if code != 200 {
+		t.Fatalf("update store: %d, body=%v", code, store)
+	}
+	if store["name"] != "user-prefs-updated" {
+		t.Fatalf("expected updated store name, got %v", store["name"])
+	}
+	code = postJSON(t, srv, "/v1/memory_stores/"+storeID+"/archive", map[string]any{}, &store)
+	if code != 200 {
+		t.Fatalf("archive store: %d, body=%v", code, store)
+	}
+	if store["archived_at"] == nil {
+		t.Fatalf("expected archived_at, got %v", store)
 	}
 }
 
@@ -605,8 +625,187 @@ func deleteReq(t *testing.T, srv *httptest.Server, path string) int {
 	return resp.StatusCode
 }
 
+func patchJSON(t *testing.T, srv *httptest.Server, path string, body any, target any) int {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest("PATCH", srv.URL+path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if target != nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, target); err != nil {
+			t.Fatalf("decode %s response: %v\nbody=%s", path, err, raw)
+		}
+	}
+	return resp.StatusCode
+}
+
+func TestE2E_M2_SessionResourcesCRUD(t *testing.T) {
+	srv, _ := setupHarness(t)
+
+	var ag map[string]any
+	postJSON(t, srv, "/v1/agents", map[string]any{
+		"name":   "resource-agent",
+		"model":  "mock-model",
+		"system": "test resources",
+		"tools":  []map[string]any{{"type": "agent_toolset_20260401"}},
+	}, &ag)
+	agentID := ag["id"].(string)
+
+	var sess map[string]any
+	postJSON(t, srv, "/v1/sessions", map[string]any{"agent": agentID}, &sess)
+	sessionID := sess["id"].(string)
+
+	var created map[string]any
+	code := postJSON(t, srv, "/v1/sessions/"+sessionID+"/resources", map[string]any{
+		"type":       "file",
+		"file_id":    "fil-test",
+		"mount_path": "/mnt/session/report.md",
+	}, &created)
+	if code != 201 {
+		t.Fatalf("add resource: %d, body=%v", code, created)
+	}
+	resID := created["id"].(string)
+	if !strings.HasPrefix(resID, "sres-") {
+		t.Fatalf("expected sres- id, got %v", resID)
+	}
+
+	var listed map[string]any
+	code = getJSON(t, srv, "/v1/sessions/"+sessionID+"/resources", &listed)
+	if code != 200 {
+		t.Fatalf("list resources: %d, body=%v", code, listed)
+	}
+	data := listed["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(data))
+	}
+
+	var got map[string]any
+	code = getJSON(t, srv, "/v1/sessions/"+sessionID+"/resources/"+resID, &got)
+	if code != 200 {
+		t.Fatalf("get resource: %d, body=%v", code, got)
+	}
+	resource := got["resource"].(map[string]any)
+	if resource["mount_path"] != "/mnt/session/report.md" {
+		t.Fatalf("unexpected resource: %v", resource)
+	}
+
+	var updated map[string]any
+	code = postJSON(t, srv, "/v1/sessions/"+sessionID+"/resources/"+resID, map[string]any{
+		"type":       "file",
+		"file_id":    "fil-test",
+		"mount_path": "/mnt/session/updated.md",
+	}, &updated)
+	if code != 200 {
+		t.Fatalf("update resource: %d, body=%v", code, updated)
+	}
+	updatedResource := updated["resource"].(map[string]any)
+	if updatedResource["mount_path"] != "/mnt/session/updated.md" {
+		t.Fatalf("expected updated mount path, got %v", updatedResource)
+	}
+
+	code = deleteReq(t, srv, "/v1/sessions/"+sessionID+"/resources/"+resID)
+	if code != 200 {
+		t.Fatalf("delete resource: %d", code)
+	}
+	code = getJSON(t, srv, "/v1/sessions/"+sessionID+"/resources/"+resID, &got)
+	if code != 404 {
+		t.Fatalf("expected get deleted resource 404, got %d body=%v", code, got)
+	}
+}
+
+func TestE2E_M2_MemoryVersionsAudit(t *testing.T) {
+	srv, _ := setupHarness(t)
+
+	var store map[string]any
+	postJSON(t, srv, "/v1/memory_stores", map[string]any{
+		"name": "audit-store",
+	}, &store)
+	storeID := store["id"].(string)
+
+	var mem map[string]any
+	code := postJSON(t, srv, "/v1/memory_stores/"+storeID+"/memories", map[string]any{
+		"path":    "/notes/a.md",
+		"content": "first",
+	}, &mem)
+	if code != 201 {
+		t.Fatalf("create memory: %d, body=%v", code, mem)
+	}
+	memID := mem["id"].(string)
+
+	var updated map[string]any
+	code = patchJSON(t, srv, "/v1/memory_stores/"+storeID+"/memories/"+memID, map[string]any{
+		"content": "second",
+	}, &updated)
+	if code != 200 {
+		t.Fatalf("update memory: %d, body=%v", code, updated)
+	}
+
+	code = deleteReq(t, srv, "/v1/memory_stores/"+storeID+"/memories/"+memID)
+	if code != 200 {
+		t.Fatalf("delete memory: %d", code)
+	}
+
+	var listed map[string]any
+	code = getJSON(t, srv, "/v1/memory_stores/"+storeID+"/memory_versions?memory_id="+memID, &listed)
+	if code != 200 {
+		t.Fatalf("list versions: %d, body=%v", code, listed)
+	}
+	data := listed["data"].([]any)
+	if len(data) != 3 {
+		t.Fatalf("expected 3 versions, got %d: %v", len(data), data)
+	}
+	ops := map[string]bool{}
+	var modifiedID string
+	for _, raw := range data {
+		version := raw.(map[string]any)
+		op := version["operation"].(string)
+		ops[op] = true
+		if op == "modified" {
+			modifiedID = version["id"].(string)
+		}
+	}
+	for _, op := range []string{"created", "modified", "deleted"} {
+		if !ops[op] {
+			t.Fatalf("expected operation %s in versions: %v", op, data)
+		}
+	}
+	if modifiedID == "" {
+		t.Fatalf("modified version id missing: %v", data)
+	}
+
+	var version map[string]any
+	code = getJSON(t, srv, "/v1/memory_stores/"+storeID+"/memory_versions/"+modifiedID, &version)
+	if code != 200 {
+		t.Fatalf("get version: %d, body=%v", code, version)
+	}
+	if version["content"] != "second" {
+		t.Fatalf("expected modified version content=second, got %v", version["content"])
+	}
+
+	var redacted map[string]any
+	code = postJSON(t, srv, "/v1/memory_stores/"+storeID+"/memory_versions/"+modifiedID+"/redact", map[string]any{}, &redacted)
+	if code != 200 {
+		t.Fatalf("redact version: %d, body=%v", code, redacted)
+	}
+	if _, ok := redacted["content"]; ok {
+		t.Fatalf("redacted version should omit content, got %v", redacted)
+	}
+	if redacted["content_sha256"] != nil || redacted["path"] != nil || redacted["content_size"] != nil {
+		t.Fatalf("redacted version should clear content metadata, got %v", redacted)
+	}
+	if redacted["redacted_at"] == nil {
+		t.Fatalf("expected redacted_at, got %v", redacted)
+	}
+}
+
 // TestE2E_M2_FileUploadAndMount 测试 Files API 完整链路：
-//   上传 → metadata → list → content → session 挂载 → agent read → 删除
+//
+//	上传 → metadata → list → content → session 挂载 → agent read → 删除
 func TestE2E_M2_FileUploadAndMount(t *testing.T) {
 	srv, mock := setupHarness(t)
 

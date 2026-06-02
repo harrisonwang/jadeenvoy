@@ -106,6 +106,10 @@ RunTurn:
   `/v1/runtimes`、`/v1/model_cards` 这么干，shape 跟前端期望不匹配导致 Console
   崩溃，还把用户卡在死循环 UI 里。详见
   [`.docs/30-adr/0007-api-compatibility.md`](.docs/30-adr/0007-api-compatibility.md)。
+- **路由真相源是 `internal/api/api.go` + `internal/api/*.go`**，人类可读清单见
+  [`.docs/20-architecture/api-surface.md`](.docs/20-architecture/api-surface.md)。除 V1 runtime
+  路径外，已挂载但仍属**实验性**的 M2 API：`/v1/files*`、`/v1/skills*`、
+  `/v1/memory_stores*`、`/v1/sessions/{id}/resources*`、`/admin/webhooks*`。
 
 ## 必须知道的约定
 
@@ -132,10 +136,11 @@ RunTurn:
 
 - [`.docs/10-feature-backlog/`](.docs/10-feature-backlog/) — 要做什么、什么时候做，
   按 M1/M2/M3/parked 切。**这是"现在该不该做这个 feature"的真相源**。不在当前
-  milestone 的功能，需要 PR promote 才能加。
+  milestone 的功能，需要 PR promote 才能加。**当前已实现 / 已挂载的功能状态以
+  [`current.md`](.docs/10-feature-backlog/current.md) 为准**（与本文件或老 ADR 冲突时以它优先）。
 - [`.docs/20-architecture/`](.docs/20-architecture/) — 系统设计、模块布局、
   API 表、数据模型。新人先看 `overview.md`。
-- [`.docs/30-adr/`](.docs/30-adr/) — 每个非平凡技术选型（19 篇 ADR）。
+- [`.docs/30-adr/`](.docs/30-adr/) — 每个非平凡技术选型（20 篇 ADR）。
   在提"换用 X 替代 Y"之前，先查是不是已经有 ADR 解释为啥选 Y。改决策必须新写
   一篇 ADR，**不要直接改老 ADR**。
 - [`.docs/40-implementation-notes/`](.docs/40-implementation-notes/) — 实现期间
@@ -162,7 +167,9 @@ RunTurn:
 ## 在这个仓库工作时
 
 - V1 运行时内核 + Vault/MITM 注入 + Auth(cookie/API key) 均已实现，e2e 测试通过
-  （~9k 行 Go 含测试）。代码干净 —— **不要做投机性重构**。Vault/Auth 的技术选型见
+  （约 1.15 万行 Go 含测试）。此外 Files / Skills / Memory stores / Session resources /
+  Outbound webhooks 等 M2 API 已挂载，但仍属**实验性**（详见
+  [`current.md`](.docs/10-feature-backlog/current.md)）。代码干净 —— **不要做投机性重构**。Vault/Auth 的技术选型见
   [ADR-0019](.docs/30-adr/0019-zero-dependency-crypto-and-proxy.md)（坚持零第三方依赖）。
 - 加功能时：**先在 `test/e2e/` 写/扩 e2e 测试**，看它失败，再写实现。Mock provider
   (`internal/provider/mock.go`) 就是为脚本化多轮流程设计的。

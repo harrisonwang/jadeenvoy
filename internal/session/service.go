@@ -16,6 +16,8 @@ type Service struct {
 	st *store.Store
 }
 
+const guardrailsMetadataKey = "_jadeenvoy_guardrails"
+
 func New(st *store.Store) *Service {
 	return &Service{st: st}
 }
@@ -32,9 +34,20 @@ func (s *Service) Create(ctx context.Context, tenantID string, req apitypes.Crea
 	}
 	snap, _ := json.Marshal(agentSnapshot(a))
 
+	// environment_id 校验（#6 / ADR）：显式传则必须存在；省略则回落到自动建的 default。
 	envID := req.EnvironmentID
 	if envID == "" {
 		envID = "default"
+		if err := s.st.EnsureDefaultEnvironment(ctx, tenantID); err != nil {
+			return nil, fmt.Errorf("ensure default environment: %w", err)
+		}
+	} else {
+		if _, err := s.st.GetEnvironment(ctx, envID); err != nil {
+			if err == store.ErrNotFound {
+				return nil, fmt.Errorf("environment not found: %s", envID)
+			}
+			return nil, err
+		}
 	}
 
 	metaJSON, _ := json.Marshal(req.Metadata)
@@ -149,6 +162,40 @@ func rowToAPI(r *store.SessionRow) *apitypes.Session {
 
 // agentSnapshot 把 store.AgentRow 转成 session 里嵌入的 agent 配置（API 形状）。
 func agentSnapshot(a *store.AgentRow) map[string]json.RawMessage {
+	metadata := a.Metadata
+	var meta map[string]string
+	if err := json.Unmarshal(a.Metadata, &meta); err == nil {
+		if raw, ok := meta[guardrailsMetadataKey]; ok {
+			out := map[string]json.RawMessage{
+				"type":        json.RawMessage(`"agent"`),
+				"id":          jsonString(a.ID),
+				"name":        jsonString(a.Name),
+				"model":       a.Model,
+				"tools":       a.Tools,
+				"mcp_servers": a.MCPServers,
+				"skills":      a.Skills,
+				"guardrails":  json.RawMessage(raw),
+				"version":     jsonInt(a.Version),
+			}
+			if len(a.Multiagent) > 0 && string(a.Multiagent) != "null" {
+				out["multiagent"] = a.Multiagent
+			}
+			delete(meta, guardrailsMetadataKey)
+			cleanMeta, _ := json.Marshal(meta)
+			if len(cleanMeta) == 0 {
+				cleanMeta = []byte(`{}`)
+			}
+			out["metadata"] = cleanMeta
+			if a.System.Valid {
+				out["system"] = jsonString(a.System.String)
+			}
+			if a.Description.Valid {
+				out["description"] = jsonString(a.Description.String)
+			}
+			return out
+		}
+	}
+
 	out := map[string]json.RawMessage{
 		"type":        json.RawMessage(`"agent"`),
 		"id":          jsonString(a.ID),
@@ -157,8 +204,11 @@ func agentSnapshot(a *store.AgentRow) map[string]json.RawMessage {
 		"tools":       a.Tools,
 		"mcp_servers": a.MCPServers,
 		"skills":      a.Skills,
-		"metadata":    a.Metadata,
+		"metadata":    metadata,
 		"version":     jsonInt(a.Version),
+	}
+	if len(a.Multiagent) > 0 && string(a.Multiagent) != "null" {
+		out["multiagent"] = a.Multiagent
 	}
 	if a.System.Valid {
 		out["system"] = jsonString(a.System.String)

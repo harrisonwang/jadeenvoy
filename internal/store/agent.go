@@ -38,6 +38,7 @@ type CreateAgentInput struct {
 	Tools       json.RawMessage
 	MCPServers  json.RawMessage
 	Skills      json.RawMessage
+	Multiagent  json.RawMessage
 	Metadata    json.RawMessage
 }
 
@@ -49,6 +50,7 @@ type UpdateAgentInput struct {
 	Tools       json.RawMessage
 	MCPServers  json.RawMessage
 	Skills      json.RawMessage
+	Multiagent  json.RawMessage
 	Metadata    json.RawMessage
 	Version     int
 }
@@ -66,7 +68,7 @@ func (s *Store) CreateAgent(ctx context.Context, in CreateAgentInput) (*AgentRow
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := s.txExec(ctx, tx,
 		`INSERT INTO agent (id, tenant_id, name, created_at, updated_at, current_version)
 		 VALUES (?, ?, ?, ?, ?, 1)`,
 		id, in.TenantID, in.Name, now, now,
@@ -90,13 +92,14 @@ func (s *Store) CreateAgent(ctx context.Context, in CreateAgentInput) (*AgentRow
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
+	multiagent := nullRaw(in.Multiagent)
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := s.txExec(ctx, tx,
 		`INSERT INTO agent_version (agent_id, version, name, model, system, description,
-		    tools, mcp_servers, skills, metadata, created_at)
-		 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    tools, mcp_servers, skills, multiagent, metadata, created_at)
+		 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Name, string(in.Model), nullStr(in.System), nullStr(in.Description),
-		string(tools), string(mcp), string(skills), string(meta), now,
+		string(tools), string(mcp), string(skills), multiagent, string(meta), now,
 	); err != nil {
 		return nil, fmt.Errorf("insert agent_version: %w", err)
 	}
@@ -109,7 +112,7 @@ func (s *Store) CreateAgent(ctx context.Context, in CreateAgentInput) (*AgentRow
 }
 
 func (s *Store) GetAgent(ctx context.Context, id string) (*AgentRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT a.id, a.tenant_id, a.name, a.current_version, a.created_at, a.updated_at, a.archived_at,
 		        v.model, v.system, v.description, v.tools, v.mcp_servers, v.skills, v.multiagent, v.metadata
 		 FROM agent a
@@ -145,7 +148,7 @@ func (s *Store) ListAgents(ctx context.Context, tenantID string, limit int) ([]*
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id FROM agent
 		 WHERE tenant_id = ? AND archived_at IS NULL
 		 ORDER BY created_at DESC LIMIT ?`, tenantID, limit)
@@ -177,7 +180,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id string, in UpdateAgentInput)
 	defer tx.Rollback()
 
 	var current int
-	if err := tx.QueryRowContext(ctx, `SELECT current_version FROM agent WHERE id = ? AND archived_at IS NULL`, id).Scan(&current); err != nil {
+	if err := s.txQueryRow(ctx, tx, `SELECT current_version FROM agent WHERE id = ? AND archived_at IS NULL`, id).Scan(&current); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -203,16 +206,17 @@ func (s *Store) UpdateAgent(ctx context.Context, id string, in UpdateAgentInput)
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
-	if _, err := tx.ExecContext(ctx,
+	multiagent := nullRaw(in.Multiagent)
+	if _, err := s.txExec(ctx, tx,
 		`INSERT INTO agent_version (agent_id, version, name, model, system, description,
-		    tools, mcp_servers, skills, metadata, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    tools, mcp_servers, skills, multiagent, metadata, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, next, in.Name, string(in.Model), nullStr(in.System), nullStr(in.Description),
-		string(tools), string(mcp), string(skills), string(meta), now,
+		string(tools), string(mcp), string(skills), multiagent, string(meta), now,
 	); err != nil {
 		return nil, fmt.Errorf("insert agent_version: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := s.txExec(ctx, tx,
 		`UPDATE agent SET name = ?, current_version = ?, updated_at = ? WHERE id = ?`,
 		in.Name, next, now, id,
 	); err != nil {
@@ -228,7 +232,7 @@ func (s *Store) ListAgentVersions(ctx context.Context, id string) ([]*AgentRow, 
 	var tenantID string
 	var archivedAt sql.NullInt64
 	var agentCreated, agentUpdated int64
-	if err := s.DB.QueryRowContext(ctx,
+	if err := s.queryRow(ctx,
 		`SELECT tenant_id, created_at, updated_at, archived_at FROM agent WHERE id = ?`, id,
 	).Scan(&tenantID, &agentCreated, &agentUpdated, &archivedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -236,7 +240,7 @@ func (s *Store) ListAgentVersions(ctx context.Context, id string) ([]*AgentRow, 
 		}
 		return nil, err
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT version, name, model, system, description, tools, mcp_servers, skills, multiagent, metadata, created_at
 		 FROM agent_version WHERE agent_id = ? ORDER BY version DESC`, id)
 	if err != nil {
@@ -269,7 +273,7 @@ func (s *Store) ListAgentVersions(ctx context.Context, id string) ([]*AgentRow, 
 
 func (s *Store) ArchiveAgent(ctx context.Context, id string) error {
 	now := time.Now().UTC().UnixMilli()
-	res, err := s.DB.ExecContext(ctx, `UPDATE agent SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, now, now, id)
+	res, err := s.exec(ctx, `UPDATE agent SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`, now, now, id)
 	if err != nil {
 		return err
 	}
@@ -280,7 +284,7 @@ func (s *Store) ArchiveAgent(ctx context.Context, id string) error {
 }
 
 func (s *Store) DeleteAgent(ctx context.Context, id string) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM agent WHERE id = ?`, id)
+	res, err := s.exec(ctx, `DELETE FROM agent WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}

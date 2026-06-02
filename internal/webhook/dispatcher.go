@@ -31,6 +31,10 @@ type Service struct {
 	stopCh  chan struct{}
 	running bool
 
+	// AllowPrivate 放行私网/环回/链路本地 webhook 目标（内网部署 + 测试）。
+	// 默认 false：拒绝这些段以防 SSRF（见 ssrf.go）。
+	AllowPrivate bool
+
 	// 钩子：测试用，正常情况留空
 	OnDelivered func(eventID, endpointID string, status int)
 }
@@ -64,8 +68,9 @@ func (s *Service) CreateEndpoint(ctx context.Context, tenantID string, req Creat
 	if req.URL == "" {
 		return nil, errors.New("url is required")
 	}
-	if !(strings.HasPrefix(req.URL, "http://") || strings.HasPrefix(req.URL, "https://")) {
-		return nil, errors.New("url must start with http:// or https://")
+	// SSRF 防护：校验目标地址（默认拒私网/环回，见 ssrf.go）。
+	if err := validateWebhookURL(req.URL, s.AllowPrivate); err != nil {
+		return nil, err
 	}
 	secret := "whsec_" + randomHex(32)
 	row, err := s.st.CreateWebhookEndpoint(ctx, store.CreateWebhookEndpointInput{
@@ -196,6 +201,14 @@ func (s *Service) deliverOne(ctx context.Context, d *store.WebhookDeliveryRow) {
 	if ep.DisabledAt.Valid {
 		// endpoint 已禁用，标记 delivered 跳过
 		_ = s.st.MarkDeliveryDelivered(ctx, d.ID, 0)
+		return
+	}
+
+	// 投递期再校验目标（防 create→deliver 之间 DNS 变化的 TOCTOU SSRF）。
+	if err := validateWebhookURL(ep.URL, s.AllowPrivate); err != nil {
+		_ = s.st.MarkDeliveryDelivered(ctx, d.ID, 0) // 不重试无效目标
+		_ = s.st.IncrementWebhookFailures(ctx, ep.ID, "blocked target: "+err.Error())
+		obs.Logger().Warn("webhook.blocked_target", "endpoint_id", ep.ID, "err", err.Error())
 		return
 	}
 

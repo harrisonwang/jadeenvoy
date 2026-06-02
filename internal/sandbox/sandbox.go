@@ -37,4 +37,7 @@ type Sandbox interface {
 // Provider 给 session 分配 sandbox。
 type Provider interface {
 	Provision(ctx context.Context, sessionID string) (Sandbox, error)
+	// Destroy 回收 session 的持久化沙箱资源（如 workdir）。session 删除时调用。
+	// 对不存在的 session 应返回 nil（幂等）。
+	Destroy(ctx context.Context, sessionID string) error
 }

@@ -81,6 +81,25 @@ func (s *Service) DeleteStore(ctx context.Context, id string) error {
 	return s.st.DeleteMemoryStore(ctx, id)
 }
 
+func (s *Service) UpdateStore(ctx context.Context, id string, req CreateStoreRequest) (*Store, error) {
+	if req.Name == "" {
+		return nil, errors.New("name is required")
+	}
+	r, err := s.st.UpdateMemoryStore(ctx, id, req.Name, req.Description)
+	if err != nil {
+		return nil, err
+	}
+	return storeRowToAPI(r), nil
+}
+
+func (s *Service) ArchiveStore(ctx context.Context, id string) (*Store, error) {
+	r, err := s.st.ArchiveMemoryStore(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return storeRowToAPI(r), nil
+}
+
 func storeRowToAPI(r *store.MemoryStoreRow) *Store {
 	o := &Store{
 		Type:      "memory_store",
@@ -91,6 +110,10 @@ func storeRowToAPI(r *store.MemoryStoreRow) *Store {
 	}
 	if r.Description.Valid {
 		o.Description = r.Description.String
+	}
+	if r.ArchivedAt.Valid {
+		at := time.UnixMilli(r.ArchivedAt.Int64).UTC()
+		o.ArchivedAt = &at
 	}
 	return o
 }
@@ -113,6 +136,11 @@ type UpsertMemoryRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	// V3: Precondition *Precondition `json:"precondition,omitempty"`
+}
+
+type UpdateMemoryRequest struct {
+	Path    string  `json:"path,omitempty"`
+	Content *string `json:"content,omitempty"`
 }
 
 const MaxMemorySize = 100 * 1024 // 100 KB
@@ -159,6 +187,24 @@ func (s *Service) ListMemories(ctx context.Context, storeID, pathPrefix string, 
 	return out, nil
 }
 
+func (s *Service) UpdateMemory(ctx context.Context, id string, req UpdateMemoryRequest) (*Memory, error) {
+	if req.Path != "" && !strings.HasPrefix(req.Path, "/") {
+		return nil, errors.New("path must be absolute (start with /)")
+	}
+	if req.Content != nil && len(*req.Content) > MaxMemorySize {
+		return nil, fmt.Errorf("content exceeds %d bytes limit", MaxMemorySize)
+	}
+	r, err := s.st.UpdateMemory(ctx, store.UpdateMemoryInput{
+		ID:      id,
+		Path:    req.Path,
+		Content: req.Content,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return memRowToAPI(r, true), nil
+}
+
 func (s *Service) DeleteMemory(ctx context.Context, id string) error {
 	return s.st.DeleteMemory(ctx, id)
 }
@@ -176,6 +222,78 @@ func memRowToAPI(r *store.MemoryRow, includeContent bool) *Memory {
 	}
 	if includeContent {
 		o.Content = r.Content
+	}
+	return o
+}
+
+// ─── Memory Versions ─────────────────────────────────────────────────────
+
+type MemoryVersion struct {
+	Type          string     `json:"type"`
+	ID            string     `json:"id"`
+	MemoryStoreID string     `json:"memory_store_id"`
+	MemoryID      string     `json:"memory_id"`
+	Operation     string     `json:"operation"`
+	Path          *string    `json:"path"`
+	Content       *string    `json:"content,omitempty"`
+	ContentSha256 *string    `json:"content_sha256"`
+	ContentSize   *int64     `json:"content_size"`
+	CreatedAt     time.Time  `json:"created_at"`
+	RedactedAt    *time.Time `json:"redacted_at"`
+}
+
+func (s *Service) ListMemoryVersions(ctx context.Context, storeID, memoryID string, limit int) ([]*MemoryVersion, error) {
+	rows, err := s.st.ListMemoryVersions(ctx, storeID, memoryID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*MemoryVersion, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, versionRowToAPI(r, false))
+	}
+	return out, nil
+}
+
+func (s *Service) GetMemoryVersion(ctx context.Context, id string) (*MemoryVersion, error) {
+	r, err := s.st.GetMemoryVersion(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return versionRowToAPI(r, true), nil
+}
+
+func (s *Service) RedactMemoryVersion(ctx context.Context, id string) (*MemoryVersion, error) {
+	r, err := s.st.RedactMemoryVersion(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return versionRowToAPI(r, true), nil
+}
+
+func versionRowToAPI(r *store.MemoryVersionRow, includeContent bool) *MemoryVersion {
+	o := &MemoryVersion{
+		Type:          "memory_version",
+		ID:            r.ID,
+		MemoryStoreID: r.MemoryStoreID,
+		MemoryID:      r.MemoryID,
+		Operation:     r.Operation,
+		CreatedAt:     r.CreatedAt,
+	}
+	if r.Path.Valid {
+		o.Path = &r.Path.String
+	}
+	if includeContent && r.Content.Valid {
+		o.Content = &r.Content.String
+	}
+	if r.ContentSha256.Valid {
+		o.ContentSha256 = &r.ContentSha256.String
+	}
+	if r.ContentSize.Valid {
+		o.ContentSize = &r.ContentSize.Int64
+	}
+	if r.RedactedAt.Valid {
+		t := time.UnixMilli(r.RedactedAt.Int64).UTC()
+		o.RedactedAt = &t
 	}
 	return o
 }

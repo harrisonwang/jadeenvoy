@@ -37,15 +37,19 @@ func (s *Store) AppendEvent(ctx context.Context, in AppendEventInput) (*EventRow
 		return nil, err
 	}
 	defer tx.Rollback()
+	d, err := s.ensureDialect()
+	if err != nil {
+		return nil, err
+	}
 
 	// 拿当前 next_seq + 自增
 	var seq int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT next_seq FROM session WHERE id = ?`, in.SessionID,
+	if err := s.txQueryRow(ctx, tx,
+		d.SelectSessionNextSeqSQL(), in.SessionID,
 	).Scan(&seq); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := s.txExec(ctx, tx,
 		`UPDATE session SET next_seq = next_seq + 1 WHERE id = ?`, in.SessionID,
 	); err != nil {
 		return nil, err
@@ -54,7 +58,7 @@ func (s *Store) AppendEvent(ctx context.Context, in AppendEventInput) (*EventRow
 	id := NewID("evt")
 	now := time.Now().UTC().UnixMilli()
 
-	if _, err := tx.ExecContext(ctx,
+	if _, err := s.txExec(ctx, tx,
 		`INSERT INTO session_event (id, session_id, thread_id, seq, type, payload, processed_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.SessionID, in.ThreadID, seq, in.Type, string(in.Payload), now, now,
@@ -83,7 +87,7 @@ func (s *Store) ListEvents(ctx context.Context, sessionID string, types []string
 	var rows *sql.Rows
 	var err error
 	if len(types) == 0 {
-		rows, err = s.DB.QueryContext(ctx,
+		rows, err = s.query(ctx,
 			`SELECT id, session_id, thread_id, seq, type, payload, processed_at, created_at
 			 FROM session_event WHERE session_id = ? ORDER BY seq ASC`,
 			sessionID)
@@ -101,7 +105,7 @@ func (s *Store) ListEvents(ctx context.Context, sessionID string, types []string
 		q := `SELECT id, session_id, thread_id, seq, type, payload, processed_at, created_at
 		      FROM session_event WHERE session_id = ? AND type IN (` + placeholders + `)
 		      ORDER BY seq ASC`
-		rows, err = s.DB.QueryContext(ctx, q, args...)
+		rows, err = s.query(ctx, q, args...)
 	}
 	if err != nil {
 		return nil, err

@@ -53,7 +53,7 @@ func (s *Store) CreateSkill(ctx context.Context, in CreateSkillInput) (*SkillRow
 		}
 	}
 
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := s.exec(ctx,
 		`INSERT INTO skill (id, tenant_id, name, description, files_json, skill_md_content, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.TenantID, in.Name, in.Description, string(filesJSON), skillMD, now, now,
@@ -64,7 +64,7 @@ func (s *Store) CreateSkill(ctx context.Context, in CreateSkillInput) (*SkillRow
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (*SkillRow, error) {
-	row := s.DB.QueryRowContext(ctx,
+	row := s.queryRow(ctx,
 		`SELECT id, tenant_id, name, description, files_json, skill_md_content, created_at, updated_at
 		 FROM skill WHERE id = ?`, id)
 	r := &SkillRow{}
@@ -87,7 +87,7 @@ func (s *Store) GetSkill(ctx context.Context, id string) (*SkillRow, error) {
 }
 
 func (s *Store) ListSkills(ctx context.Context, tenantID string) ([]*SkillRow, error) {
-	rows, err := s.DB.QueryContext(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, tenant_id, name, description, files_json, skill_md_content, created_at, updated_at
 		 FROM skill WHERE tenant_id = ? ORDER BY created_at DESC`, tenantID)
 	if err != nil {
@@ -115,6 +115,6 @@ func (s *Store) ListSkills(ctx context.Context, tenantID string) ([]*SkillRow, e
 }
 
 func (s *Store) DeleteSkill(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM skill WHERE id = ?`, id)
+	_, err := s.exec(ctx, `DELETE FROM skill WHERE id = ?`, id)
 	return err
 }

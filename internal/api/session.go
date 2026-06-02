@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/harrisonwang/jadeenvoy/internal/obs"
 	"github.com/harrisonwang/jadeenvoy/pkg/apitypes"
 )
 
@@ -58,6 +59,12 @@ func deleteSession(d *Deps) http.HandlerFunc {
 		if err := d.Session.Delete(r.Context(), id); err != nil {
 			writeErr(w, 500, "internal_error", err.Error())
 			return
+		}
+		// 回收沙箱 workdir（spec：删除 session 同时移除其 sandbox）。失败不阻断删除，仅告警。
+		if d.Harness != nil {
+			if err := d.Harness.DestroySandbox(r.Context(), id); err != nil {
+				obs.Logger().Warn("sandbox.destroy.failed", "session_id", id, "err", err.Error())
+			}
 		}
 		writeJSON(w, 200, map[string]string{"id": id, "type": "session_deleted"})
 	}

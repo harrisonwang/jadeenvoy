@@ -145,6 +145,17 @@ dev: ## 本地起 jed（dev mode，SQLite，AUTH_MODE=bypass）
 	JE_DATABASE_URL=sqlite://$(PWD)/data/jadeenvoy.db \
 	$(GO) run ./cmd/jed
 
+.PHONY: dev-real
+dev-real: ## 本地起 jed（OpenAI-compatible gateway，默认 tw-agent-max；需先 export JE_LLM_API_KEY）
+	test -n "$$JE_LLM_API_KEY"
+	JE_AUTH_MODE=bypass \
+	JE_DATA_DIR=$(PWD)/data \
+	JE_DATABASE_URL=sqlite://$(PWD)/data/jadeenvoy.db \
+	JE_LLM_PROVIDER=openai_compat \
+	JE_LLM_BASE_URL=$${JE_LLM_BASE_URL:-http://192.168.143.117:3900/v1} \
+	JE_DEFAULT_AGENT_MODEL=$${JE_DEFAULT_AGENT_MODEL:-tw-agent-max} \
+	$(GO) run ./cmd/jed
+
 .PHONY: vault-dev
 vault-dev: ## 本地起 je-vault
 	JE_DATA_DIR=$(PWD)/data \

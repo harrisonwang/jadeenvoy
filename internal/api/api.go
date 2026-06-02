@@ -30,6 +30,32 @@ type Deps struct {
 	Auth     *auth.Service
 	Harness  *harness.Harness
 	AuthMode string
+
+	LLMProvider       string
+	DefaultAgentModel string
+}
+
+// NewRouter 构建 chi router。
+func corsMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			// Echo the concrete origin instead of "*" so browser cookie auth can work.
+			// Local/self-hosted deployments may put the console on a different port.
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, last-event-id")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // NewRouter 构建 chi router。
@@ -37,6 +63,7 @@ func NewRouter(d *Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(corsMW)
 	r.Use(loggingMW)
 
 	r.Get("/health", health(d))
@@ -52,6 +79,14 @@ func NewRouter(d *Deps) http.Handler {
 			r.Delete("/{id}", deleteAgent(d))
 			r.Post("/{id}/archive", archiveAgent(d))
 			r.Get("/{id}/versions", listAgentVersions(d))
+		})
+		r.Route("/environments", func(r chi.Router) {
+			r.Post("/", createEnvironment(d))
+			r.Get("/", listEnvironments(d))
+			r.Get("/{id}", getEnvironment(d))
+			r.Post("/{id}", updateEnvironment(d))
+			r.Delete("/{id}", deleteEnvironment(d))
+			r.Post("/{id}/archive", archiveEnvironment(d))
 		})
 		r.Route("/sessions", func(r chi.Router) {
 			r.Post("/", createSession(d))
@@ -84,7 +119,10 @@ func NewRouter(d *Deps) http.Handler {
 		})
 		// Session resources (M2)
 		r.Route("/sessions/{id}/resources", func(r chi.Router) {
+			r.Get("/", listSessionResources(d))
 			r.Post("/", addSessionResource(d))
+			r.Get("/{resId}", getSessionResource(d))
+			r.Post("/{resId}", updateSessionResource(d))
 			r.Delete("/{resId}", deleteSessionResource(d))
 		})
 		// Vaults (M1/ADR-0015)
@@ -92,9 +130,12 @@ func NewRouter(d *Deps) http.Handler {
 			MountVaultRoutes(r, d.Vault)
 		}
 	})
-	if d.Webhook != nil || d.Auth != nil {
+	if d.Webhook != nil || d.Auth != nil || d.Store != nil {
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(RequireAuth(d))
+			if d.Store != nil {
+				r.Get("/dashboard", getDashboard(d))
+			}
 			if d.Webhook != nil {
 				MountWebhookRoutes(r, d.Webhook)
 			}

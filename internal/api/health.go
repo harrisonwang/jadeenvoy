@@ -13,6 +13,10 @@ func health(d *Deps) http.HandlerFunc {
 				"db": d.Store.Driver,
 			},
 			"auth": d.AuthMode,
+			"llm": map[string]string{
+				"provider":      d.LLMProvider,
+				"default_model": d.DefaultAgentModel,
+			},
 		})
 	}
 }

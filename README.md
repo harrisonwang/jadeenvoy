@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" alt="Go 1.23+" />
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+" />
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0 License" />
   <img src="https://img.shields.io/badge/Status-WIP-orange" alt="WIP" />
 </p>
@@ -18,17 +18,18 @@
 
 Implemented today:
 
-- `jed` daemon with SQLite persistence, event log, SSE, metrics, and LLM providers `mock` / `openai_compat` / `anthropic` / `anthropic_compat` (all hand-written thin clients, no SDK).
+- `jed` daemon with SQLite/Postgres persistence, event log, SSE, metrics, and LLM providers `mock` / `openai_compat` / `anthropic` / `anthropic_compat` (all hand-written thin clients, no SDK).
 - Agent/session runtime loop with subprocess sandbox and built-in `bash`, `read`, `write`, `edit`, `glob`, `grep` tools.
 - Core e2e flow: user message → model request → tool use → tool result → final agent message.
 - **Vault** (`static_bearer`) with AES-256-GCM storage, and the **`je-vault` HTTPS MITM proxy** that strips dummy client credentials and injects real tokens into sandbox egress.
 - **Auth**: cookie sessions + API keys with `AUTH_MODE` (`required`/`optional`/`bypass`) — all standard-library crypto, zero third-party deps (see ADR-0019).
 - **`je` CLI**: agents / sessions (with streaming `send`) / vaults / api-keys over REST — stdlib `flag`, no cobra.
-- Experimental M2 APIs for files, memory stores, skills, custom tools, session resources, and outbound webhooks.
+- Experimental M2 APIs for files, memory stores, skills, session resources, and outbound webhooks.
 
 Not complete yet:
 
-- Console UI (fork of OMA), Postgres backend, the GitLab review adapter demo, and one-shot docker-compose are not started.
+- Console UI productization, the GitLab review adapter demo, and one-shot docker-compose are not complete.
+- Postgres now has a store dialect adapter; versioned migrations and production packaging still need follow-up hardening.
 - Some compatibility endpoints beyond the V1 runtime path may still be incomplete.
 
 JadeEnvoy is a managed-agents runtime: write an agent (model + system prompt
@@ -108,6 +109,23 @@ JE_AUTH_MODE=bypass JE_LLM_PROVIDER=mock go run ./cmd/jed
 curl localhost:8787/health
 ```
 
+SQLite is the default. To run against Postgres, point `JE_DATABASE_URL` at a
+Postgres DSN:
+
+```bash
+JE_DATABASE_URL='postgres://jadeenvoy:jadeenvoy@localhost:5432/jadeenvoy?sslmode=disable' \
+JE_AUTH_MODE=bypass \
+JE_LLM_PROVIDER=mock \
+go run ./cmd/jed
+```
+
+The optional Postgres smoke test uses the same DSN shape:
+
+```bash
+JE_TEST_POSTGRES_URL='postgres://jadeenvoy:jadeenvoy@localhost:5432/jadeenvoy_test?sslmode=disable' \
+go test ./internal/store -run TestPostgresStoreSmoke -v -count=1
+```
+
 For a realistic local loop, use the e2e tests as executable examples:
 
 ```bash
@@ -122,6 +140,18 @@ JE_LLM_BASE_URL=https://your-gateway.example.com/v1 \
 JE_LLM_API_KEY=... \
 go run ./cmd/jed
 ```
+
+For the local real-model gateway used by this workspace, keep the API key outside
+git and start:
+
+```bash
+export JE_LLM_API_KEY=...
+make dev-real
+```
+
+`make dev-real` defaults to `JE_LLM_BASE_URL=http://192.168.143.117:3900/v1`
+and `JE_DEFAULT_AGENT_MODEL=tw-agent-max`. Override either variable in your
+shell when needed. The `mock` provider remains the deterministic path for tests.
 
 ## Documentation
 

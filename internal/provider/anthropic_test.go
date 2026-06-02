@@ -143,7 +143,7 @@ func TestAnthropic_RequestConversion(t *testing.T) {
 			{Type: "tool_result", ToolUseID: "toolu_1", ToolResult: "file.txt"},
 		}},
 	}
-	req := buildAnthropicRequest(ChatRequest{System: "be helpful", Messages: msgs, MaxTokens: 100})
+	req := buildAnthropicRequest(ChatRequest{System: "be helpful", Messages: msgs, MaxTokens: 100}, false)
 
 	if req.System != "be helpful" || req.MaxTokens != 100 || !req.Stream {
 		t.Errorf("unexpected top-level: %+v", req)
@@ -168,7 +168,7 @@ func TestAnthropic_RequestConversion(t *testing.T) {
 func TestAnthropic_EmptyToolResultSerializesContent(t *testing.T) {
 	req := buildAnthropicRequest(ChatRequest{Messages: []Message{
 		{Role: RoleUser, Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_1", ToolResult: ""}}},
-	}})
+	}}, false)
 	b, _ := json.Marshal(req)
 	if !strings.Contains(string(b), `"content":""`) {
 		t.Errorf("empty tool_result must still emit content field, got: %s", b)

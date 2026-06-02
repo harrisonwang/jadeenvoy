@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" alt="Go 1.23+" />
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+" />
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0 License" />
   <img src="https://img.shields.io/badge/Status-开发中-orange" alt="WIP" />
 </p>
@@ -18,7 +18,7 @@
 
 当前已实现：
 
-- `jed` 守护进程：SQLite 持久化、event log、SSE、metrics，以及 `mock` / `openai_compat` / `anthropic` / `anthropic_compat` provider。
+- `jed` 守护进程：SQLite/Postgres 持久化、event log、SSE、metrics，以及 `mock` / `openai_compat` / `anthropic` / `anthropic_compat` provider。
 - Agent/session runtime loop：subprocess sandbox，内置 `bash`、`read`、`write`、`edit`、`glob`、`grep` 工具。
 - 核心 e2e 闭环：user message → model request → tool use → tool result → final agent message。
 - **Vault**：`static_bearer` 凭据、AES-256-GCM 存储，以及 `je-vault` HTTPS MITM proxy 凭据注入。
@@ -28,7 +28,8 @@
 
 尚未完成：
 
-- Console UI fork/productization、Postgres backend、GitLab review adapter demo、一键 docker-compose 体验尚未完成。
+- Console UI productization、GitLab review adapter demo、一键 docker-compose 体验尚未完成。
+- Postgres 已有 store dialect adapter；版本化迁移与生产打包还需要后续加固。
 - V1 runtime 路径之外的部分兼容端点可能仍不完整。
 
 JadeEnvoy 是一个 managed-agents 运行时：你写 agent（模型 + 系统提示词 + 工具），
@@ -105,6 +106,22 @@ JE_AUTH_MODE=bypass JE_LLM_PROVIDER=mock go run ./cmd/jed
 curl localhost:8787/health
 ```
 
+默认使用 SQLite。要切到 Postgres，设置 `JE_DATABASE_URL`：
+
+```bash
+JE_DATABASE_URL='postgres://jadeenvoy:jadeenvoy@localhost:5432/jadeenvoy?sslmode=disable' \
+JE_AUTH_MODE=bypass \
+JE_LLM_PROVIDER=mock \
+go run ./cmd/jed
+```
+
+可选的 Postgres smoke test 也使用同样的 DSN 形式：
+
+```bash
+JE_TEST_POSTGRES_URL='postgres://jadeenvoy:jadeenvoy@localhost:5432/jadeenvoy_test?sslmode=disable' \
+go test ./internal/store -run TestPostgresStoreSmoke -v -count=1
+```
+
 更完整的本地闭环可以直接看 e2e 测试：
 
 ```bash
@@ -119,6 +136,17 @@ JE_LLM_BASE_URL=https://your-gateway.example.com/v1 \
 JE_LLM_API_KEY=... \
 go run ./cmd/jed
 ```
+
+本地真实模型网关不要把 API key 写进仓库，先在 shell 里注入：
+
+```bash
+export JE_LLM_API_KEY=...
+make dev-real
+```
+
+`make dev-real` 默认使用 `JE_LLM_BASE_URL=http://192.168.143.117:3900/v1`
+与 `JE_DEFAULT_AGENT_MODEL=tw-agent-max`。需要切换网关或模型时在 shell 中覆盖变量即可。
+`mock` provider 仍然保留作为自动化测试的确定性路径。
 
 ## 文档
 
